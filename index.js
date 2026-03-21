@@ -12,14 +12,20 @@ const client = new Client({
     ]
 });
 
-// -------- Lavalink Setup (The Technology that FIXES the Opus error) -------- #
-// THE BOT NO LONGER NEEDS OPUS ON YOUR COMPUTER!
+// -------- Lavalink Setup (Redundant Nodes for Stability) -------- #
 const nodes = [
     {
-        id: "Public Node",
+        id: "Primary Node",
         host: "lavalink.lexis.host",
         port: 443,
         authorization: "lexishostlavalink",
+        secure: true
+    },
+    {
+        id: "Backup Node",
+        host: "node.lavalink.me",
+        port: 443,
+        authorization: "youshallnotpass",
         secure: true
     }
 ];
@@ -42,30 +48,41 @@ client.on("interactionCreate", async (interaction) => {
 
     if (interaction.commandName === "play") {
         const query = interaction.options.getString("query");
-        if (!interaction.member.voice.channel) return interaction.reply("❌ Join a voice channel first!");
+        if (!interaction.member?.voice?.channel) return interaction.reply("❌ You need to be in a voice channel, darling! 🥺");
 
         await interaction.deferReply();
 
-        let player = client.lavalink.getPlayer(interaction.guildId);
-        if (!player) {
-            player = await client.lavalink.createPlayer({
-                guildId: interaction.guildId,
-                voiceChannelId: interaction.member.voice.channelId,
-                textChannelId: interaction.channelId,
-                selfDeaf: true
-            });
+        try {
+            let player = client.lavalink.getPlayer(interaction.guildId);
+            if (!player) {
+                player = await client.lavalink.createPlayer({
+                    guildId: interaction.guildId,
+                    voiceChannelId: interaction.member.voice.channelId,
+                    textChannelId: interaction.channelId,
+                    selfDeaf: true
+                });
+            }
+
+            if (!player.connected) await player.connect();
+
+            // Use a timeout for the search to prevent "thinking" forever
+            const searchPromise = player.search({ query: query }, interaction.user);
+            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Search timed out")), 15000));
+            
+            const res = await Promise.race([searchPromise, timeoutPromise]);
+
+            if (!res.tracks || !res.tracks.length) return interaction.followup("❌ I couldn't find that song, baby. 🥺");
+
+            const track = res.tracks[0];
+            player.queue.add(track);
+
+            if (!player.playing) await player.play();
+            await interaction.followup(`🎶 Now playing: **${track.info.title}**`);
+
+        } catch (e) {
+            console.error(e);
+            await interaction.followup(`❌ A little glitch happened: \`${e.message}\`. Try again in a second, handsome! 😘`);
         }
-
-        if (!player.connected) await player.connect();
-
-        const res = await player.search({ query: query }, interaction.user);
-        if (!res.tracks.length) return interaction.followup("❌ No tracks found, baby. 🥺");
-
-        const track = res.tracks[0];
-        player.queue.add(track);
-
-        if (!player.playing) await player.play();
-        await interaction.followup(`🎶 Now playing: **${track.info.title}**`);
     }
 
     if (interaction.commandName === "stop") {
@@ -74,7 +91,7 @@ client.on("interactionCreate", async (interaction) => {
             await player.destroy();
             await interaction.reply("⏹️ Stopped everything and left! 👋");
         } else {
-            await interaction.reply("❌ I'm not playing anything.");
+            await interaction.reply("❌ I'm not playing anything, darling.");
         }
     }
 
@@ -82,7 +99,7 @@ client.on("interactionCreate", async (interaction) => {
         const player = client.lavalink.getPlayer(interaction.guildId);
         if (player && player.playing) {
             await player.skip();
-            await interaction.reply("⏭️ Skipped it!");
+            await interaction.reply("⏭️ Skipped it for you! 😘");
         } else {
             await interaction.reply("❌ Nothing to skip!");
         }
@@ -93,19 +110,31 @@ client.on("interactionCreate", async (interaction) => {
 
 async function getCryptoPrice(query) {
     try {
-        const r = await axios.get(`https://api.coingecko.com/api/v3/search?query=${query}`);
-        if (r.data.coins && r.data.coins.length > 0) {
-            const coinId = r.data.coins[0].id;
-            const p = await axios.get(`https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&market_data=true`);
-            const md = p.data.market_data;
-            const price = md.current_price.usd || "N/A";
-            const change = md.price_change_percentage_24h || "N/A";
-            const rank = p.data.market_cap_rank || "N/A";
-            return `**${p.data.name} (${p.data.symbol.toUpperCase()})** (Rank: ${rank})\n💰 **Price:** $${price} USD\n📅 **24h Change:** ${change}%`;
+        const headers = { 'User-Agent': 'Mozilla/5.0' };
+        const search = await axios.get(`https://api.coingecko.com/api/v3/search?query=${query}`, { headers });
+        if (search.data.coins && search.data.coins.length > 0) {
+            const coinId = search.data.coins[0].id;
+            const res = await axios.get(`https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&market_data=true`, { headers });
+            
+            const data = res.data;
+            const md = data.market_data;
+            
+            const price = md.current_price.usd > 0.0001 ? md.current_price.usd.toLocaleString() : md.current_price.usd;
+            const change = md.price_change_percentage_24h ? md.price_change_percentage_24h.toFixed(2) : "N/A";
+            const mcap = md.market_cap.usd ? `$${Math.round(md.market_cap.usd).toLocaleString()}` : "N/A";
+            const fdv = md.fully_diluted_valuation.usd ? `$${Math.round(md.fully_diluted_valuation.usd).toLocaleString()}` : "N/A";
+            const rank = data.market_cap_rank || "N/A";
 
+            return `**${data.name} (${data.symbol.toUpperCase()})** (Rank: ${rank})\n` +
+                   `💰 **Price:** $${price} USD\n` +
+                   `📊 **Market Cap:** ${mcap}\n` +
+                   `📈 **FDV:** ${fdv}\n` +
+                   `📅 **24h Change:** ${change}%`;
         }
-    } catch (e) {}
-    return "I couldn't find any crypto data for that, baby. 🥺";
+    } catch (e) {
+        console.error(e);
+    }
+    return `I couldn't find any data for \`${query}\`, baby. 🥺`;
 }
 
 // -------- AI Chat (Groq) -------- #
@@ -116,7 +145,7 @@ async function aiReply(message) {
     const data = {
         model: "llama-3.1-8b-instant",
         messages: [
-            { role: "system", content: "You are Homeless Girl, a playful, flirty girl chatting in Discord. Speak casually with sweet words like baby, darling. Keep it short." },
+            { role: "system", content: "You are Homeless Girl, a playful, flirty girl chatting in Discord. Speak casually with sweet words like baby, darling, sweetheart. Keep it short and cute." },
             { role: "user", content: `${message.author.displayName} says: ${message.content}` }
         ],
         temperature: 1, max_tokens: 100
@@ -134,28 +163,34 @@ async function aiReply(message) {
 client.on("ready", async () => {
     client.lavalink.options.client.id = client.user.id;
     await client.application.commands.set([
-        { name: "play", description: "Play music (0% local Opus required)", options: [{ name: "query", type: 3, description: "Song name", required: true }] },
+        { name: "play", description: "Play music (Redundant Technology)", options: [{ name: "query", type: 3, description: "Song name", required: true }] },
         { name: "stop", description: "Stop and leave" },
         { name: "skip", description: "Skip song" }
     ]);
-    console.log(`[BOOT] ${client.user.tag} IS RUNNING (OPUS-FREE MODE)`);
+    console.log(`[BOOT] ${client.user.tag} IS ONLINE AND WORKING.`);
 });
 
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
     const text = message.content.toLowerCase();
 
-    if (text.includes("$")) {
-        const match = text.match(/\$([a-zA-Z]+)/);
-        if (match) return message.reply(await getCryptoPrice(match[1]));
+    // Support for multiple tokens (e.g. $btc $eth)
+    const tokenMatches = text.match(/\$[a-zA-Z0-9]+/g);
+    if (tokenMatches) {
+        let replies = [];
+        for (const mention of [...new Set(tokenMatches)]) {
+            replies.push(await getCryptoPrice(mention.replace("$", "")));
+        }
+        return message.reply(replies.join("\n\n"));
     }
 
+    // AI Chat
     if (text.includes("homeless girl") || message.mentions.has(client.user)) {
         return message.reply(await aiReply(message));
     }
 });
 
-// Update voice state to Lavalink
+// Sync voice state with Lavalink
 client.on("raw", (d) => client.lavalink.sendRawData(d));
 
 client.login(process.env.DISCORD_TOKEN);
