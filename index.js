@@ -150,6 +150,33 @@ CORE DIRECTIVES:
         
         // Log the bot's response back into its memory of this user
         history.push({ role: "assistant", content: botResponse });
+
+        // Voice Note Generation! 
+        // 20% chance to send audio naturally, OR 100% chance if the user explicitly asks for "voice note" / "say it"
+        const forceVoice = message.content.toLowerCase().includes("voice note") || message.content.toLowerCase().includes("say it");
+        if ((forceVoice || Math.random() < 0.25) && botResponse.length < 195 && !botResponse.includes("http")) {
+            try {
+                const googleTTS = require('google-tts-api'); // Free TTS Engine
+                const { AttachmentBuilder } = require('discord.js');
+                
+                // Strip discord markup and emojis so TTS doesn't read the literal asterisk characters
+                const cleanSpeech = botResponse.replace(/[*_~`>|]/g, '').replace(/<@[0-9]+>/g, 'babe'); 
+
+                const audioUrl = googleTTS.getAudioUrl(cleanSpeech, {
+                    lang: 'en-US',
+                    slow: false,
+                    host: 'https://translate.google.com',
+                });
+
+                return {
+                    content: `🎙️ *Sent a voice note...*\n${botResponse}`,
+                    files: [new AttachmentBuilder(audioUrl, { name: 'homeless-girl-voice.mp3' })]
+                };
+            } catch(e) {
+                console.error("[TTS ERROR]", e);
+                // Fall back to regular text if TTS generation fails
+            }
+        }
         
         return botResponse;
     } catch (e) {
