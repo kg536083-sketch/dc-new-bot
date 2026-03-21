@@ -16,16 +16,16 @@ const client = new Client({
 const nodes = [
     {
         id: "Primary Node",
-        host: "lavalink.lexis.host",
+        host: "lavalink.jirayu.net",
         port: 443,
-        authorization: "lexishostlavalink",
+        authorization: "youshallnotpass",
         secure: true
     },
     {
         id: "Backup Node",
-        host: "node.lavalink.me",
+        host: "lavalink-v4.triniumhost.com",
         port: 443,
-        authorization: "youshallnotpass",
+        authorization: "free",
         secure: true
     }
 ];
