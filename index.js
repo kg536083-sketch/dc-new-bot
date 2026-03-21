@@ -70,11 +70,19 @@ client.lavalink = new LavalinkManager({
 
 // -------- Node Event Logs -------- #
 client.lavalink.nodeManager.on("connect", (node) => {
-    console.log(`[LAVALINK] Node "${node.id}" connected!`);
+    console.log(`[LAVALINK] Node "${node.id}" connected! Version: ${node.version}`);
+});
+
+client.lavalink.nodeManager.on("disconnect", (node, reason) => {
+    console.log(`[LAVALINK] Node "${node.id}" disconnected! Reason:`, reason);
 });
 
 client.lavalink.nodeManager.on("error", (node, error) => {
-    console.error(`[LAVALINK] Node "${node.id}" encountered an error:`, error.message || error);
+    console.error(`[LAVALINK] Node "${node.id}" error:`, error.message || error);
+});
+
+client.lavalink.nodeManager.on("reconnecting", (node) => {
+    console.log(`[LAVALINK] Node "${node.id}" reconnecting...`);
 });
 
 
@@ -90,8 +98,18 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.deferReply();
 
         try {
+            // Step 1: Check connected nodes
+            const connectedNodes = [...client.lavalink.nodeManager.nodes.values()].filter(n => n.connected);
+            console.log(`[PLAY] Connected nodes: ${connectedNodes.map(n => n.id).join(", ") || "NONE"}`);
+            
+            if (connectedNodes.length === 0) {
+                return interaction.editReply("❌ No Lavalink nodes are connected right now. Try again in a moment, baby! 🥺");
+            }
+
+            // Step 2: Get or create player
             let player = client.lavalink.getPlayer(interaction.guildId);
             if (!player) {
+                console.log(`[PLAY] Creating new player for guild ${interaction.guildId}`);
                 player = await client.lavalink.createPlayer({
                     guildId: interaction.guildId,
                     voiceChannelId: interaction.member.voice.channelId,
@@ -99,6 +117,7 @@ client.on("interactionCreate", async (interaction) => {
                     selfDeaf: true
                 });
             }
+            console.log(`[PLAY] Player node: ${player.node?.id || "NO NODE"}`);
 
             const withTimeout = (promise, ms, errorMessage) => {
                 let timeoutId;
@@ -109,28 +128,39 @@ client.on("interactionCreate", async (interaction) => {
                 return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
             };
 
+            // Step 3: Connect to voice
             if (!player.connected) {
+                console.log(`[PLAY] Connecting to voice channel...`);
                 await withTimeout(player.connect(), 10000, "Connecting to voice channel timed out");
+                console.log(`[PLAY] Voice connected!`);
             }
 
-            // Use a timeout for the search to prevent "thinking" forever
-            const res = await withTimeout(player.search({ query: query }, interaction.user), 15000, "Search timed out from Lavalink node");
+            // Step 4: Search
+            console.log(`[PLAY] Searching for: "${query}" on node: ${player.node?.id}`);
+            const searchStart = Date.now();
+            const res = await withTimeout(player.search({ query: query }, interaction.user), 30000, "Search timed out (30s)");
+            console.log(`[PLAY] Search completed in ${Date.now() - searchStart}ms, loadType: ${res?.loadType}, tracks: ${res?.tracks?.length}`);
 
             if (!res || !res.tracks || !res.tracks.length) return interaction.editReply("❌ I couldn't find that song, baby. 🥺");
 
             const track = res.tracks[0];
             player.queue.add(track);
 
+            // Step 5: Play
             if (!player.playing) {
-                // Play might also hang if the node's HTTP server is struggling
-                await withTimeout(player.play(), 15000, "Starting playback timed out from Lavalink node");
+                console.log(`[PLAY] Starting playback of: ${track.info.title}`);
+                const playStart = Date.now();
+                await withTimeout(player.play(), 30000, "Starting playback timed out (30s)");
+                console.log(`[PLAY] Playback started in ${Date.now() - playStart}ms`);
             }
             await interaction.editReply(`🎶 Now playing: **${track.info.title}**`);
 
         } catch (e) {
-            console.error(e);
-            const player = client.lavalink.getPlayer(interaction.guildId);
-            if (player && !player.playing) await player.destroy();
+            console.error(`[PLAY ERROR]`, e.message, e.stack);
+            try {
+                const player = client.lavalink.getPlayer(interaction.guildId);
+                if (player && !player.playing) await player.destroy().catch(() => {});
+            } catch(_) {}
             await interaction.editReply(`❌ A little glitch happened: \`${e.message}\`. Try again in a second, handsome! 😘`).catch(() => {});
         }
     }
