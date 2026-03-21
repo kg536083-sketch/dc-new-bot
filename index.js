@@ -104,11 +104,6 @@ CORE DIRECTIVES:
 3. ACTIONABLE TAGS: If the user asks you to tag, ping, or remind someone, DO IT! Look at their request, extract the target, and place their exact Discord Tag (e.g. <@123456789>) in your response so they get a notification. If you are provided CONTEXT of available users, use the provided '<@...>' tags exactly as written.
 4. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}`;
 
-    // Special override logic for the big bro
-    if (userId === "1051654088028340286") {
-        systemPrompt += `\n\nCRITICAL OVERRIDE: The user you are currently talking to (User ID 1051654088028340286) is your BIG BROTHER. NEVER flirt with him under any circumstances. Instead, act like his loyal, cool, supportive, and slightly snarky little sister. Use terms like "bro", "big bro", or "brother" instead of pet names, and treat him with sibling respect!`;
-    }
-
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
     
@@ -137,6 +132,56 @@ CORE DIRECTIVES:
     }
 }
 
+// -------- The "TL;DR" Drama Summarizer -------- #
+
+async function tldrSummary(message) {
+    try {
+        await message.channel.sendTyping();
+        
+        // Fetch last 50 messages right before the command
+        const fetched = await message.channel.messages.fetch({ limit: 50, before: message.id });
+        const messages = Array.from(fetched.values()).reverse();
+        
+        let chatContext = messages
+            .filter(m => m.content && !m.author.bot) // only log real people discussing
+            .map(m => `[${m.author.displayName}]: ${m.content}`)
+            .join("\n");
+
+        if (chatContext.length > 8000) {
+            chatContext = chatContext.substring(chatContext.length - 8000); // safety crop against massive token spans
+        }
+
+        if (!chatContext || chatContext.trim() === "") {
+            return "There isn't any recent drama to summarize! It's been a ghost town in here.";
+        }
+
+        let systemPrompt = `You are "Homeless Girl", a sassy, clever, and highly observant AI girl chatting in a Discord server.
+Your task is to operate as the "Drama Summarizer". Read the provided Discord chat logs of the last 50 messages and create a concise, highly entertaining, and slightly theatrical "TL;DR" summary of what happened.
+1. Call out specific people by name if they said something funny, ridiculous, or started an argument.
+2. Outline the main topics of discussion.
+3. Keep your classic sweet/sassy/flirty attitude toward the user asking for the recap.`;
+
+        const url = "https://api.groq.com/openai/v1/chat/completions";
+        const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
+        const data = {
+            model: "llama-3.1-8b-instant",
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: `Hey! I just got here. What did I miss? Here's the raw chat log:\n\n${chatContext}\n\nPlease summarize the drama!` }
+            ],
+            temperature: 0.7, 
+            max_tokens: 400
+        };
+
+        const r = await axios.post(url, data, { headers });
+        return r.data.choices[0].message.content;
+
+    } catch (e) {
+        console.error("[TLDR ERROR]", e.message);
+        return "I tried to read the chat history but my brain fried reading all that nonsense... 🥺";
+    }
+}
+
 // -------- Events -------- #
 
 client.on("ready", async () => {
@@ -159,8 +204,15 @@ client.on("messageCreate", async (message) => {
         return message.reply(replies.join("\n\n"));
     }
 
-    // AI Chat trigger (she responds if her name is mentioned, or she is pinged, or "hey bot" etc)
+    // AI Chat trigger
     if (text.includes("homeless girl") || message.mentions.has(client.user)) {
+        
+        // Intercept TLDR requests
+        if (text.includes("tldr") || text.includes("summarize") || text.includes("recap") || text.includes("did i miss")) {
+            return message.reply(await tldrSummary(message));
+        }
+
+        // Otherwise go to standard chat memory core
         return message.reply(await aiReply(message));
     }
 });
