@@ -38,10 +38,16 @@ client.player.events.on('playerStart', (queue, track) => {
 
 client.player.events.on('error', (queue, error) => {
     console.error(`[PLAY ERROR] Player error:`, error.message);
+    if (queue && queue.metadata) {
+        queue.metadata.channel.send(`❌ Ouch! The stream broke: \`${error.message}\``).catch(()=>{});
+    }
 });
 
 client.player.events.on('playerError', (queue, error) => {
     console.error(`[PLAY ERROR] Player error inside connection:`, error.message);
+    if (queue && queue.metadata) {
+        queue.metadata.channel.send(`❌ The connection failed to stream audio: \`${error.message}\``).catch(()=>{});
+    }
 });
 
 
@@ -61,12 +67,15 @@ client.on("interactionCreate", async (interaction) => {
             
             const { track } = await client.player.play(interaction.member.voice.channel, query, {
                 nodeOptions: {
-                    metadata: interaction
+                    metadata: interaction,
+                    leaveOnEnd: false,
+                    leaveOnEmpty: true,
+                    leaveOnEmptyCooldown: 300000, // 5 minutes
                 }
             });
 
             console.log(`[PLAY] Found and playing: ${track.title}`);
-            await interaction.editReply(`🎶 Now playing: **${track.title}**`);
+            await interaction.editReply(`🎶 Now playing: **${track.title}**\n*(If it skips instantly, YouTube might be blocking Railway's IP!)*`);
 
         } catch (e) {
             console.error(`[PLAY ERROR]`, e.message);
