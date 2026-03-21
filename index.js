@@ -1,7 +1,5 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
-const { Player } = require('discord-player');
-const { DefaultExtractors } = require('@discord-player/extractor');
 const axios = require('axios');
 
 // -------- Global Safety Net -------- #
@@ -16,95 +14,8 @@ const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildVoiceStates
+        GatewayIntentBits.MessageContent
     ]
-});
-
-// -------- LOCAL MUSIC SETUP (Bypassing Lavalink completely) -------- #
-client.player = new Player(client, {
-    ytdlOptions: {
-        quality: 'highestaudio',
-        highWaterMark: 1 << 25
-    }
-});
-
-// Load all extractors (YouTube, Spotify, Soundcloud, etc.)
-client.player.extractors.loadMulti(DefaultExtractors);
-
-client.player.events.on('playerStart', (queue, track) => {
-    console.log(`[PLAY] Started streaming ${track.title} locally!`);
-});
-
-client.player.events.on('error', (queue, error) => {
-    console.error(`[PLAY ERROR] Player error:`, error.message);
-    if (queue && queue.metadata) {
-        queue.metadata.channel.send(`❌ Ouch! The stream broke: \`${error.message}\``).catch(()=>{});
-    }
-});
-
-client.player.events.on('playerError', (queue, error) => {
-    console.error(`[PLAY ERROR] Player error inside connection:`, error.message);
-    if (queue && queue.metadata) {
-        queue.metadata.channel.send(`❌ The connection failed to stream audio: \`${error.message}\``).catch(()=>{});
-    }
-});
-
-
-// -------- Slash Commands -------- #
-
-client.on("interactionCreate", async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-
-    if (interaction.commandName === "play") {
-        const query = interaction.options.getString("query");
-        if (!interaction.member?.voice?.channel) return interaction.reply("❌ You need to be in a voice channel, darling! 🥺");
-
-        await interaction.deferReply();
-
-        try {
-            console.log(`[PLAY] Searching locally for: "${query}"`);
-            
-            const { track } = await client.player.play(interaction.member.voice.channel, query, {
-                nodeOptions: {
-                    metadata: interaction,
-                    leaveOnEnd: false,
-                    leaveOnEmpty: true,
-                    leaveOnEmptyCooldown: 300000, // 5 minutes
-                }
-            });
-
-            console.log(`[PLAY] Found and playing: ${track.title}`);
-            await interaction.editReply(`🎶 Now playing: **${track.title}**\n*(If it skips instantly, YouTube might be blocking Railway's IP!)*`);
-
-        } catch (e) {
-            console.error(`[PLAY ERROR]`, e.message);
-            await interaction.editReply(`❌ A little glitch happened: \`${e.message}\`. Try again in a second, handsome! 😘`).catch(() => {});
-        }
-    }
-
-    if (interaction.commandName === "stop") {
-        const queue = client.player.nodes.get(interaction.guildId);
-        if (queue && !queue.isEmpty()) {
-            queue.delete();
-            await interaction.reply("⏹️ Stopped everything and left! 👋");
-        } else if (queue) {
-            queue.delete();
-            await interaction.reply("⏹️ Stopped and left! 👋");
-        } else {
-            await interaction.reply("❌ I'm not playing anything, darling.");
-        }
-    }
-
-    if (interaction.commandName === "skip") {
-        const queue = client.player.nodes.get(interaction.guildId);
-        if (queue && queue.node.isPlaying()) {
-            queue.node.skip();
-            await interaction.reply("⏭️ Skipped it for you! 😘");
-        } else {
-            await interaction.reply("❌ Nothing to skip!");
-        }
-    }
 });
 
 // -------- Crypto Prices (CoinGecko) -------- #
@@ -138,43 +49,84 @@ async function getCryptoPrice(query) {
     return `I couldn't find any data for \`${query}\`, baby. 🥺`;
 }
 
-// -------- AI Chat (Groq) -------- #
+// -------- AI Chat (Groq) with Memory and Adaptive Personality -------- #
+
+// We store memory per user to maintain context across multiple messages
+const userMemories = new Map();
 
 async function aiReply(message) {
+    const userId = message.author.id;
+    
+    // Initialize memory for new users
+    if (!userMemories.has(userId)) {
+        userMemories.set(userId, []);
+    }
+    
+    const history = userMemories.get(userId);
+    
+    // Log the user's new message into memory
+    history.push({ 
+        role: "user", 
+        content: `(User ${message.author.displayName}): ${message.content}` 
+    });
+    
+    // We only keep the last 12 messages of history so context doesn't blow up the API limit
+    if (history.length > 12) {
+        history.shift(); // Remove oldest user message
+        history.shift(); // Remove oldest assistant response
+    }
+
+    // Adaptive Personality Directives
+    const systemPrompt = `You are "Homeless Girl", a responsive, adaptable, and clever AI girl chatting in a Discord server. 
+
+CORE DIRECTIVES:
+1. You have MEMORY. You can see the user's past messages in this exact conversation thread. If they mention their name, a detail, or ask you about something they said previously, REMEMBER IT and use it normally in replies.
+2. ADAPTIVE PERSONALITY: 
+   - If the user is nice, sweet, or casual: You act very sweet, calm, cheesy, and extremely flirty. Use pet names like "baby", "darling", "handsome", "sweetheart".
+   - If the user becomes brutal, aggressive, rude, or mean: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. Do not use pet names if they are being deeply insulting; respond with harsh sass, dominance, or sheer unbothered brutality.
+3. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.`;
+
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
+    
+    // We use a stronger model (llama-3.3-70b-versatile or 8b) to ensure she closely adheres to the adaptive instructions
     const data = {
-        model: "llama-3.1-8b-instant",
+        model: "llama-3.1-8b-instant",  
         messages: [
-            { role: "system", content: "You are Homeless Girl, a playful, flirty girl chatting in Discord. Speak casually with sweet words like baby, darling, sweetheart. Keep it short and cute." },
-            { role: "user", content: `${message.author.displayName} says: ${message.content}` }
+            { role: "system", content: systemPrompt },
+            ...history
         ],
-        temperature: 1, max_tokens: 100
+        temperature: 0.85, 
+        max_tokens: 150
     };
+
     try {
         const r = await axios.post(url, data, { headers });
-        return r.data.choices[0].message.content;
+        const botResponse = r.data.choices[0].message.content;
+        
+        // Log the bot's response back into its memory of this user
+        history.push({ role: "assistant", content: botResponse });
+        
+        return botResponse;
     } catch (e) {
-        return "Oops! I'm having a little brain freeze, baby. 🧊";
+        console.error("[GROQ ERROR]", e.message);
+        return "Oops! I'm having a little brain freeze. 🧊";
     }
 }
 
 // -------- Events -------- #
 
 client.on("ready", async () => {
-    await client.application.commands.set([
-        { name: "play", description: "Play music (Local Processing!)", options: [{ name: "query", type: 3, description: "Song name", required: true }] },
-        { name: "stop", description: "Stop and leave" },
-        { name: "skip", description: "Skip song" }
-    ]);
-    console.log(`[BOOT] ${client.user.tag} IS ONLINE AND WORKING LOCALLY.`);
+    // Clear out any lingering music slash commands
+    await client.application.commands.set([]);
+    console.log(`[BOOT] ${client.user.tag} IS ONLINE AND READY TO CHAT.`);
 });
 
 client.on("messageCreate", async (message) => {
     if (message.author.bot) return;
     const text = message.content.toLowerCase();
 
-    // Support for multiple tokens (e.g. $btc $eth)
+    // Support for multiple crypto tokens (e.g. $btc $eth)
     const tokenMatches = text.match(/\$[a-zA-Z0-9]+/g);
     if (tokenMatches) {
         let replies = [];
@@ -184,7 +136,7 @@ client.on("messageCreate", async (message) => {
         return message.reply(replies.join("\n\n"));
     }
 
-    // AI Chat
+    // AI Chat trigger (she responds if her name is mentioned, or she is pinged, or "hey bot" etc)
     if (text.includes("homeless girl") || message.mentions.has(client.user)) {
         return message.reply(await aiReply(message));
     }
