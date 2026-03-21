@@ -163,7 +163,7 @@ CORE DIRECTIVES:
                 const cleanSpeech = botResponse.replace(/[*_~`>|]/g, '').replace(/<@[0-9]+>/g, 'babe'); 
 
                 const audioUrl = googleTTS.getAudioUrl(cleanSpeech, {
-                    lang: 'en-US',
+                    lang: 'en-IN',
                     slow: false,
                     host: 'https://translate.google.com',
                 });
