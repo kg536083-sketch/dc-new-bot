@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
-const { LavalinkManager } = require('lavalink-client');
+const { Player } = require('discord-player');
+const { DefaultExtractors } = require('@discord-player/extractor');
 const axios = require('axios');
 
 // -------- Global Safety Net -------- #
@@ -20,69 +21,27 @@ const client = new Client({
     ]
 });
 
-// -------- Lavalink Setup (Redundant Nodes for Stability) -------- #
-const nodes = [
-    {
-        id: "Serenetia",
-        host: "lavalinkv4.serenetia.com",
-        port: 443,
-        authorization: "https://seretia.link/discord",
-        secure: true,
-        requestSignalTimeoutMS: 30000
-    },
-    {
-        id: "AneFaiz",
-        host: "lava-v4.millohost.my.id",
-        port: 443,
-        authorization: "https://discord.gg/mjS5J2K3ep",
-        secure: true,
-        requestSignalTimeoutMS: 30000
-    },
-    {
-        id: "Jirayu",
-        host: "lavalink.jirayu.net",
-        port: 443,
-        authorization: "youshallnotpass",
-        secure: true,
-        requestSignalTimeoutMS: 30000
-    },
-    {
-        id: "TriniumHost",
-        host: "lavalink-v4.triniumhost.com",
-        port: 443,
-        authorization: "free",
-        secure: true,
-        requestSignalTimeoutMS: 30000
-    }
-];
-
-client.lavalink = new LavalinkManager({
-    nodes: nodes,
-    sendToShard: (guildId, payload) => {
-        client.guilds.cache.get(guildId)?.shard?.send(payload);
-    },
-    autoSkip: true, // Automatically play the next song in the queue
-    client: {
-        id: "", // Will be auto-set on ready
-        username: "Homeless Girl"
+// -------- LOCAL MUSIC SETUP (Bypassing Lavalink completely) -------- #
+client.player = new Player(client, {
+    ytdlOptions: {
+        quality: 'highestaudio',
+        highWaterMark: 1 << 25
     }
 });
 
-// -------- Node Event Logs -------- #
-client.lavalink.nodeManager.on("connect", (node) => {
-    console.log(`[LAVALINK] Node "${node.id}" connected! Version: ${node.version}`);
+// Load all extractors (YouTube, Spotify, Soundcloud, etc.)
+client.player.extractors.loadMulti(DefaultExtractors);
+
+client.player.events.on('playerStart', (queue, track) => {
+    console.log(`[PLAY] Started streaming ${track.title} locally!`);
 });
 
-client.lavalink.nodeManager.on("disconnect", (node, reason) => {
-    console.log(`[LAVALINK] Node "${node.id}" disconnected! Reason:`, reason);
+client.player.events.on('error', (queue, error) => {
+    console.error(`[PLAY ERROR] Player error:`, error.message);
 });
 
-client.lavalink.nodeManager.on("error", (node, error) => {
-    console.error(`[LAVALINK] Node "${node.id}" error:`, error.message || error);
-});
-
-client.lavalink.nodeManager.on("reconnecting", (node) => {
-    console.log(`[LAVALINK] Node "${node.id}" reconnecting...`);
+client.player.events.on('playerError', (queue, error) => {
+    console.error(`[PLAY ERROR] Player error inside connection:`, error.message);
 });
 
 
@@ -98,87 +57,40 @@ client.on("interactionCreate", async (interaction) => {
         await interaction.deferReply();
 
         try {
-            // Step 1: Check connected nodes
-            const connectedNodes = [...client.lavalink.nodeManager.nodes.values()].filter(n => n.connected);
-            console.log(`[PLAY] Connected nodes: ${connectedNodes.map(n => n.id).join(", ") || "NONE"}`);
+            console.log(`[PLAY] Searching locally for: "${query}"`);
             
-            if (connectedNodes.length === 0) {
-                return interaction.editReply("❌ No Lavalink nodes are connected right now. Try again in a moment, baby! 🥺");
-            }
+            const { track } = await client.player.play(interaction.member.voice.channel, query, {
+                nodeOptions: {
+                    metadata: interaction
+                }
+            });
 
-            // Step 2: Get or create player
-            let player = client.lavalink.getPlayer(interaction.guildId);
-            if (!player) {
-                console.log(`[PLAY] Creating new player for guild ${interaction.guildId}`);
-                player = await client.lavalink.createPlayer({
-                    guildId: interaction.guildId,
-                    voiceChannelId: interaction.member.voice.channelId,
-                    textChannelId: interaction.channelId,
-                    selfDeaf: true
-                });
-            }
-            console.log(`[PLAY] Player node: ${player.node?.id || "NO NODE"}`);
-
-            const withTimeout = (promise, ms, errorMessage) => {
-                let timeoutId;
-                const timeoutPromise = new Promise((_, reject) => {
-                    timeoutId = setTimeout(() => reject(new Error(errorMessage)), ms);
-                });
-                promise.catch(() => {}); // Prevent unhandled rejections if the original promise fails after timeout
-                return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
-            };
-
-            // Step 3: Connect to voice
-            if (!player.connected) {
-                console.log(`[PLAY] Connecting to voice channel...`);
-                await withTimeout(player.connect(), 10000, "Connecting to voice channel timed out");
-                console.log(`[PLAY] Voice connected!`);
-            }
-
-            // Step 4: Search
-            console.log(`[PLAY] Searching for: "${query}" on node: ${player.node?.id}`);
-            const searchStart = Date.now();
-            const res = await withTimeout(player.search({ query: query }, interaction.user), 30000, "Search timed out (30s)");
-            console.log(`[PLAY] Search completed in ${Date.now() - searchStart}ms, loadType: ${res?.loadType}, tracks: ${res?.tracks?.length}`);
-
-            if (!res || !res.tracks || !res.tracks.length) return interaction.editReply("❌ I couldn't find that song, baby. 🥺");
-
-            const track = res.tracks[0];
-            player.queue.add(track);
-
-            // Step 5: Play
-            if (!player.playing) {
-                console.log(`[PLAY] Starting playback of: ${track.info.title}`);
-                const playStart = Date.now();
-                await withTimeout(player.play(), 30000, "Starting playback timed out (30s)");
-                console.log(`[PLAY] Playback started in ${Date.now() - playStart}ms`);
-            }
-            await interaction.editReply(`🎶 Now playing: **${track.info.title}**`);
+            console.log(`[PLAY] Found and playing: ${track.title}`);
+            await interaction.editReply(`🎶 Now playing: **${track.title}**`);
 
         } catch (e) {
-            console.error(`[PLAY ERROR]`, e.message, e.stack);
-            try {
-                const player = client.lavalink.getPlayer(interaction.guildId);
-                if (player && !player.playing) await player.destroy().catch(() => {});
-            } catch(_) {}
+            console.error(`[PLAY ERROR]`, e.message);
             await interaction.editReply(`❌ A little glitch happened: \`${e.message}\`. Try again in a second, handsome! 😘`).catch(() => {});
         }
     }
 
     if (interaction.commandName === "stop") {
-        const player = client.lavalink.getPlayer(interaction.guildId);
-        if (player) {
-            await player.destroy();
+        const queue = client.player.nodes.get(interaction.guildId);
+        if (queue && !queue.isEmpty()) {
+            queue.delete();
             await interaction.reply("⏹️ Stopped everything and left! 👋");
+        } else if (queue) {
+            queue.delete();
+            await interaction.reply("⏹️ Stopped and left! 👋");
         } else {
             await interaction.reply("❌ I'm not playing anything, darling.");
         }
     }
 
     if (interaction.commandName === "skip") {
-        const player = client.lavalink.getPlayer(interaction.guildId);
-        if (player && player.playing) {
-            await player.skip();
+        const queue = client.player.nodes.get(interaction.guildId);
+        if (queue && queue.node.isPlaying()) {
+            queue.node.skip();
             await interaction.reply("⏭️ Skipped it for you! 😘");
         } else {
             await interaction.reply("❌ Nothing to skip!");
@@ -241,15 +153,12 @@ async function aiReply(message) {
 // -------- Events -------- #
 
 client.on("ready", async () => {
-    client.lavalink.options.client.id = client.user.id;
-    // CRITICAL: Initialize Lavalink Client to connect to nodes!
-    client.lavalink.init({ id: client.user.id, username: client.user.username });
     await client.application.commands.set([
-        { name: "play", description: "Play music (Redundant Technology)", options: [{ name: "query", type: 3, description: "Song name", required: true }] },
+        { name: "play", description: "Play music (Local Processing!)", options: [{ name: "query", type: 3, description: "Song name", required: true }] },
         { name: "stop", description: "Stop and leave" },
         { name: "skip", description: "Skip song" }
     ]);
-    console.log(`[BOOT] ${client.user.tag} IS ONLINE AND WORKING.`);
+    console.log(`[BOOT] ${client.user.tag} IS ONLINE AND WORKING LOCALLY.`);
 });
 
 client.on("messageCreate", async (message) => {
@@ -271,8 +180,5 @@ client.on("messageCreate", async (message) => {
         return message.reply(await aiReply(message));
     }
 });
-
-// Sync voice state with Lavalink
-client.on("raw", (d) => client.lavalink.sendRawData(d));
 
 client.login(process.env.DISCORD_TOKEN);
