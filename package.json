@@ -10,6 +10,6 @@
     "dotenv": "^16.4.5"
   },
   "scripts": {
-    "start": "node index.js"
+    "start": "node --dns-result-order=ipv4first index.js"
   }
 }
