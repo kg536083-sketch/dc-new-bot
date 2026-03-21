@@ -35,11 +35,22 @@ client.lavalink = new LavalinkManager({
     sendToShard: (guildId, payload) => {
         client.guilds.cache.get(guildId)?.shard?.send(payload);
     },
+    autoSkip: true, // Automatically play the next song in the queue
     client: {
         id: "", // Will be auto-set on ready
         username: "Homeless Girl"
     }
 });
+
+// -------- Node Event Logs -------- #
+client.lavalink.nodeManager.on("connect", (node) => {
+    console.log(`[LAVALINK] Node "${node.id}" connected!`);
+});
+
+client.lavalink.nodeManager.on("error", (node, error) => {
+    console.error(`[LAVALINK] Node "${node.id}" encountered an error:`, error.message || error);
+});
+
 
 // -------- Slash Commands -------- #
 
@@ -63,7 +74,11 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
 
-            if (!player.connected) await player.connect();
+            if (!player.connected) {
+                const connectPromise = player.connect();
+                const connectTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Connecting to voice channel timed out")), 10000));
+                await Promise.race([connectPromise, connectTimeout]);
+            }
 
             // Use a timeout for the search to prevent "thinking" forever
             const searchPromise = player.search({ query: query }, interaction.user);
@@ -162,6 +177,8 @@ async function aiReply(message) {
 
 client.on("ready", async () => {
     client.lavalink.options.client.id = client.user.id;
+    // CRITICAL: Initialize Lavalink Client to connect to nodes!
+    client.lavalink.init({ id: client.user.id, username: client.user.username });
     await client.application.commands.set([
         { name: "play", description: "Play music (Redundant Technology)", options: [{ name: "query", type: 3, description: "Song name", required: true }] },
         { name: "stop", description: "Stop and leave" },
