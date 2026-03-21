@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
 const axios = require('axios');
+const cheerio = require('cheerio');
 
 // -------- Global Safety Net -------- #
 process.on('unhandledRejection', (error) => {
@@ -18,9 +19,30 @@ const client = new Client({
     ]
 });
 
+// -------- Web Search Tool (Live Data Access) -------- #
+
+// Automatically scrapes DuckDuckGo Lite to give her brain access to 2026 data
+async function fetchRealTimeContext(query) {
+    try {
+        const res = await axios.post('https://lite.duckduckgo.com/lite/', `q=${encodeURIComponent(query)}`, {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': 'Mozilla/5.0' },
+            timeout: 5000
+        });
+        const $ = cheerio.load(res.data);
+        const snippets = [];
+        $('.result-snippet').each((i, el) => {
+            if (i < 3) snippets.push($(el).text().trim()); // Grab top 3 results
+        });
+        return snippets.join(" | ");
+    } catch (e) { 
+        return ""; 
+    }
+}
+
 // -------- Crypto Prices (CoinGecko) -------- #
 
 async function getCryptoPrice(query) {
+    // ... crypto logic remains identical
     try {
         const headers = { 'User-Agent': 'Mozilla/5.0' };
         const search = await axios.get(`https://api.coingecko.com/api/v3/search?query=${query}`, { headers });
@@ -43,41 +65,34 @@ async function getCryptoPrice(query) {
                    `📈 **FDV:** ${fdv}\n` +
                    `📅 **24h Change:** ${change}%`;
         }
-    } catch (e) {
-        console.error(e);
-    }
+    } catch (e) {}
     return `I couldn't find any data for \`${query}\`, baby. 🥺`;
 }
 
 // -------- AI Chat (Groq) with Memory and Adaptive Personality -------- #
 
-// We store memory per user to maintain context across multiple messages
 const userMemories = new Map();
 
 async function aiReply(message) {
     const userId = message.author.id;
     
-    // Initialize memory for new users
     if (!userMemories.has(userId)) {
         userMemories.set(userId, []);
     }
     
     const history = userMemories.get(userId);
     
-    // Log the user's new message into memory
     history.push({ 
         role: "user", 
         content: `(User ${message.author.displayName}): ${message.content}` 
     });
     
-    // Age out old messages to avoid blowing up the API limit
     if (history.length > 12) {
-        history.shift(); // Remove oldest user message
-        history.shift(); // Remove oldest assistant response
+        history.shift(); 
+        history.shift(); 
     }
 
-    // Smart Tagging / Ping Context Generation
-    // Scans the message for words that match any cached member names, and provides the LLM their exact ping IDs
+    // Smart Tagging / Ping Context
     const words = message.content.toLowerCase().split(/\s+/);
     const potentialTags = [];
     if (message.guild) {
@@ -89,9 +104,19 @@ async function aiReply(message) {
             }
         });
     }
-    const tagContext = potentialTags.length > 0 
-        ? `\n\nCONTEXT - AVAILABLE USERS TO TAG: If asked to ping, tag, or remind someone, use these exact tags: ${potentialTags.join(", ")}` 
-        : "";
+    const tagContext = potentialTags.length > 0 ? `\n\nCONTEXT - AVAILABLE USERS TO TAG: ${potentialTags.join(", ")}` : "";
+
+    // Live Web Search Engine Activation!
+    let liveWebContext = "";
+    if (/(2024|2025|2026|latest|recent|now|today|news|weather)/.test(message.content.toLowerCase()) && words.length > 2) {
+        await message.channel.sendTyping(); // Takes a second to scrape
+        const cleanQuery = message.content.replace(/homeless girl/gi, "").trim();
+        const searchResults = await fetchRealTimeContext(cleanQuery);
+        if (searchResults) {
+            console.log(`[WEB SEARCH] Triggered for query: "${cleanQuery}"`);
+            liveWebContext = `\n\nLIVE INTERNET SEARCH RESULTS (Use this to answer the user as if you already naturally knew it. It contains real-time data up to March 2026!): ${searchResults}`;
+        }
+    }
 
     // Adaptive Personality Directives
     let systemPrompt = `You are "Homeless Girl", a responsive, adaptable, and clever AI girl chatting in a Discord server. 
@@ -102,7 +127,8 @@ CORE DIRECTIVES:
    - If the user is nice, sweet, or casual: You act very sweet, calm, cheesy, and extremely flirty. Use pet names like "baby", "darling", "handsome", "sweetheart".
    - If the user becomes brutal, aggressive, rude, or mean: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. Do not use pet names if they are being deeply insulting; respond with harsh sass, dominance, or sheer unbothered brutality.
 3. ACTIONABLE TAGS: If the user asks you to tag, ping, or remind someone, DO IT! Look at their request, extract the target, and place their exact Discord Tag (e.g. <@123456789>) in your response so they get a notification. If you are provided CONTEXT of available users, use the provided '<@...>' tags exactly as written.
-4. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}`;
+4. RECOMMENDATIONS/FACTS: If asked for movie, anime, web series, or game recommendations, provide exactly 2-3 top-tier suggestions. Format them perfectly using Discord markdown (e.g., **Title** - One short punchy sentence). Keep the whole response VERY short, well-structured, and easy to read.
+5. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}`;
 
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
