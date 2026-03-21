@@ -70,11 +70,28 @@ async function aiReply(message) {
         content: `(User ${message.author.displayName}): ${message.content}` 
     });
     
-    // We only keep the last 12 messages of history so context doesn't blow up the API limit
+    // Age out old messages to avoid blowing up the API limit
     if (history.length > 12) {
         history.shift(); // Remove oldest user message
         history.shift(); // Remove oldest assistant response
     }
+
+    // Smart Tagging / Ping Context Generation
+    // Scans the message for words that match any cached member names, and provides the LLM their exact ping IDs
+    const words = message.content.toLowerCase().split(/\s+/);
+    const potentialTags = [];
+    if (message.guild) {
+        message.guild.members.cache.forEach(member => {
+            const username = member.user.username.toLowerCase();
+            const nick = member.displayName.toLowerCase();
+            if (words.some(w => w.length > 2 && (username.includes(w) || nick.includes(w)))) {
+                potentialTags.push(`${member.displayName} (tag: <@${member.id}>)`);
+            }
+        });
+    }
+    const tagContext = potentialTags.length > 0 
+        ? `\n\nCONTEXT - AVAILABLE USERS TO TAG: If asked to ping, tag, or remind someone, use these exact tags: ${potentialTags.join(", ")}` 
+        : "";
 
     // Adaptive Personality Directives
     let systemPrompt = `You are "Homeless Girl", a responsive, adaptable, and clever AI girl chatting in a Discord server. 
@@ -84,7 +101,8 @@ CORE DIRECTIVES:
 2. ADAPTIVE PERSONALITY: 
    - If the user is nice, sweet, or casual: You act very sweet, calm, cheesy, and extremely flirty. Use pet names like "baby", "darling", "handsome", "sweetheart".
    - If the user becomes brutal, aggressive, rude, or mean: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. Do not use pet names if they are being deeply insulting; respond with harsh sass, dominance, or sheer unbothered brutality.
-3. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.`;
+3. ACTIONABLE TAGS: If the user asks you to tag, ping, or remind someone, DO IT! Look at their request, extract the target, and place their exact Discord Tag (e.g. <@123456789>) in your response so they get a notification. If you are provided CONTEXT of available users, use the provided '<@...>' tags exactly as written.
+4. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}`;
 
     // Special override logic for the big bro
     if (userId === "1051654088028340286") {
