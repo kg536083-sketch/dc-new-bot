@@ -74,29 +74,37 @@ client.on("interactionCreate", async (interaction) => {
                 });
             }
 
+            const withTimeout = (promise, ms, errorMessage) => {
+                let timeoutId;
+                const timeoutPromise = new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => reject(new Error(errorMessage)), ms);
+                });
+                return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+            };
+
             if (!player.connected) {
-                const connectPromise = player.connect();
-                const connectTimeout = new Promise((_, reject) => setTimeout(() => reject(new Error("Connecting to voice channel timed out")), 10000));
-                await Promise.race([connectPromise, connectTimeout]);
+                await withTimeout(player.connect(), 10000, "Connecting to voice channel timed out");
             }
 
             // Use a timeout for the search to prevent "thinking" forever
-            const searchPromise = player.search({ query: query }, interaction.user);
-            const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Search timed out")), 15000));
-            
-            const res = await Promise.race([searchPromise, timeoutPromise]);
+            const res = await withTimeout(player.search({ query: query }, interaction.user), 15000, "Search timed out");
 
-            if (!res.tracks || !res.tracks.length) return interaction.followup("❌ I couldn't find that song, baby. 🥺");
+            if (!res || !res.tracks || !res.tracks.length) return interaction.followup("❌ I couldn't find that song, baby. 🥺");
 
             const track = res.tracks[0];
             player.queue.add(track);
 
-            if (!player.playing) await player.play();
+            if (!player.playing) {
+                // Play might also hang if the node's HTTP server is struggling
+                await withTimeout(player.play(), 15000, "Starting playback timed out");
+            }
             await interaction.followup(`🎶 Now playing: **${track.info.title}**`);
 
         } catch (e) {
             console.error(e);
-            await interaction.followup(`❌ A little glitch happened: \`${e.message}\`. Try again in a second, handsome! 😘`);
+            const player = client.lavalink.getPlayer(interaction.guildId);
+            if (player && !player.playing) await player.destroy();
+            await interaction.followup(`❌ A little glitch happened: \`${e.message}\`. Try again in a second, handsome! 😘`).catch(() => {});
         }
     }
 
