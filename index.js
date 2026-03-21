@@ -15,14 +15,28 @@ const client = new Client({
 // -------- Lavalink Setup (Redundant Nodes for Stability) -------- #
 const nodes = [
     {
-        id: "Primary Node",
+        id: "Serenetia",
+        host: "lavalinkv4.serenetia.com",
+        port: 443,
+        authorization: "https://seretia.link/discord",
+        secure: true
+    },
+    {
+        id: "AneFaiz",
+        host: "lava-v4.millohost.my.id",
+        port: 443,
+        authorization: "https://discord.gg/mjS5J2K3ep",
+        secure: true
+    },
+    {
+        id: "Jirayu",
         host: "lavalink.jirayu.net",
         port: 443,
         authorization: "youshallnotpass",
         secure: true
     },
     {
-        id: "Backup Node",
+        id: "TriniumHost",
         host: "lavalink-v4.triniumhost.com",
         port: 443,
         authorization: "free",
