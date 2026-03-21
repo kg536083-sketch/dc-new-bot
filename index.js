@@ -3,6 +3,14 @@ const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js'
 const { LavalinkManager } = require('lavalink-client');
 const axios = require('axios');
 
+// -------- Global Safety Net -------- #
+process.on('unhandledRejection', (error) => {
+    console.error('[UNHANDLED REJECTION]', error);
+});
+process.on('uncaughtException', (error) => {
+    console.error('[UNCAUGHT EXCEPTION]', error);
+});
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -19,28 +27,32 @@ const nodes = [
         host: "lavalinkv4.serenetia.com",
         port: 443,
         authorization: "https://seretia.link/discord",
-        secure: true
+        secure: true,
+        requestSignalTimeoutMS: 30000
     },
     {
         id: "AneFaiz",
         host: "lava-v4.millohost.my.id",
         port: 443,
         authorization: "https://discord.gg/mjS5J2K3ep",
-        secure: true
+        secure: true,
+        requestSignalTimeoutMS: 30000
     },
     {
         id: "Jirayu",
         host: "lavalink.jirayu.net",
         port: 443,
         authorization: "youshallnotpass",
-        secure: true
+        secure: true,
+        requestSignalTimeoutMS: 30000
     },
     {
         id: "TriniumHost",
         host: "lavalink-v4.triniumhost.com",
         port: 443,
         authorization: "free",
-        secure: true
+        secure: true,
+        requestSignalTimeoutMS: 30000
     }
 ];
 
