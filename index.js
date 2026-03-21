@@ -79,6 +79,7 @@ client.on("interactionCreate", async (interaction) => {
                 const timeoutPromise = new Promise((_, reject) => {
                     timeoutId = setTimeout(() => reject(new Error(errorMessage)), ms);
                 });
+                promise.catch(() => {}); // Prevent unhandled rejections if the original promise fails after timeout
                 return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
             };
 
@@ -87,24 +88,24 @@ client.on("interactionCreate", async (interaction) => {
             }
 
             // Use a timeout for the search to prevent "thinking" forever
-            const res = await withTimeout(player.search({ query: query }, interaction.user), 15000, "Search timed out");
+            const res = await withTimeout(player.search({ query: query }, interaction.user), 15000, "Search timed out from Lavalink node");
 
-            if (!res || !res.tracks || !res.tracks.length) return interaction.followup("❌ I couldn't find that song, baby. 🥺");
+            if (!res || !res.tracks || !res.tracks.length) return interaction.editReply("❌ I couldn't find that song, baby. 🥺");
 
             const track = res.tracks[0];
             player.queue.add(track);
 
             if (!player.playing) {
                 // Play might also hang if the node's HTTP server is struggling
-                await withTimeout(player.play(), 15000, "Starting playback timed out");
+                await withTimeout(player.play(), 15000, "Starting playback timed out from Lavalink node");
             }
-            await interaction.followup(`🎶 Now playing: **${track.info.title}**`);
+            await interaction.editReply(`🎶 Now playing: **${track.info.title}**`);
 
         } catch (e) {
             console.error(e);
             const player = client.lavalink.getPlayer(interaction.guildId);
             if (player && !player.playing) await player.destroy();
-            await interaction.followup(`❌ A little glitch happened: \`${e.message}\`. Try again in a second, handsome! 😘`).catch(() => {});
+            await interaction.editReply(`❌ A little glitch happened: \`${e.message}\`. Try again in a second, handsome! 😘`).catch(() => {});
         }
     }
 
