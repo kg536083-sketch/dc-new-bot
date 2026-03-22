@@ -182,47 +182,21 @@ CORE DIRECTIVES:
                 const { AttachmentBuilder } = require('discord.js');
                 const cleanSpeech = botResponse.replace(/[*_~`>|]/g, '').replace(/<@[0-9]+>/g, 'babe'); 
 
-                if (process.env.ELEVENLABS_API_KEY) {
-                    // Premium ElevenLabs Voice ("Mimi" - incredibly cute, expressive, high-pitched anime-like voice)
-                    const voiceId = "zrHiDhphv9ZnVBTiNycL"; 
-                    const ttsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`;
-                    
-                    const audioRes = await axios.post(ttsUrl, {
-                        text: cleanSpeech,
-                        model_id: "eleven_multilingual_v2",
-                        voice_settings: { stability: 0.35, similarity_boost: 0.85, style: 0.0, use_speaker_boost: true }
-                    }, {
-                        headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
-                        responseType: 'arraybuffer'
-                    });
+                // High Quality Microsoft Edge Azure TTS (Flawless & Unlimited)
+                const { Communicate } = require('edge-tts-universal');
+                const comm = new Communicate(cleanSpeech, 'en-US-AnaNeural');
+                const chunks = [];
+                for await (const chunk of comm.stream()) {
+                    if (chunk.type === 'audio') chunks.push(Buffer.from(chunk.data));
+                }
+                const generatedAudio = Buffer.concat(chunks);
 
-                    return {
-                        content: `🎙️ *Sent a voice note...*\n${botResponse}`,
-                        files: [new AttachmentBuilder(Buffer.from(audioRes.data), { name: 'homeless-girl-cute.mp3' })]
-                    };
-                } else {
-                    // Free Fallback: High Quality Microsoft Edge Azure TTS 
-                    const { Communicate } = require('edge-tts-universal');
-                    const comm = new Communicate(cleanSpeech, 'en-US-AnaNeural');
-                    const chunks = [];
-                    for await (const chunk of comm.stream()) {
-                        if (chunk.type === 'audio') chunks.push(Buffer.from(chunk.data));
-                    }
-                    const fullBuffer = Buffer.concat(chunks);
-                    
-                    return {
-                        content: `🎙️ *Sent a voice note...*\n${botResponse}`,
-                        files: [new AttachmentBuilder(fullBuffer, { name: 'homeless-girl-voice.mp3' })]
-                    };
-                }
+                return {
+                    content: `🎙️ *Sent a voice note...*\n${botResponse}`,
+                    files: [new AttachmentBuilder(generatedAudio, { name: 'homeless-girl-voice.mp3' })]
+                };
             } catch(e) {
-                let errDetails = e.message;
-                if (e.response && e.response.data) {
-                    try { errDetails = Buffer.from(e.response.data).toString('utf8'); } catch(_) {}
-                }
-                console.error("[TTS ERROR]", errDetails);
-                botResponse += `\n*(TTS Failed: ${errDetails.substring(0, 100)}...)*`;
-                // Fall back to regular text if API generation hits a limit
+                console.error("[TTS FAILURE]", e.message);
             }
         }
         
