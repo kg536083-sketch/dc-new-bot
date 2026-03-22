@@ -186,7 +186,12 @@ CORE DIRECTIVES:
                     };
                 }
             } catch(e) {
-                console.error("[TTS ERROR]", e.message);
+                let errDetails = e.message;
+                if (e.response && e.response.data) {
+                    try { errDetails = Buffer.from(e.response.data).toString('utf8'); } catch(_) {}
+                }
+                console.error("[TTS ERROR]", errDetails);
+                botResponse += `\n*(TTS Failed: ${errDetails.substring(0, 100)}...)*`;
                 // Fall back to regular text if API generation hits a limit
             }
         }
