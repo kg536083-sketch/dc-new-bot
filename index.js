@@ -241,8 +241,14 @@ CORE DIRECTIVES:
             try {
                 const googleTTS = require('google-tts-api');
                 const { AttachmentBuilder } = require('discord.js');
-                
-                let cleanSpeech = botResponse.replace(/[*_~`>|]/g, '').replace(/<@[0-9]+>/g, 'babe').replace(/<a?:\w+:[0-9]+>/g, ''); 
+                // Strip Discord tags, URLs, and Emojis so TTS doesn't read the raw code out loud!
+                let cleanSpeech = botResponse
+                    .replace(/https?:\/\/[^\s]+/g, '') // Strip Tenor GIF URLs from spoken audio
+                    .replace(/<@!?[0-9]+>/g, 'baby')   // Replace user tags with a cute word
+                    .replace(/<@&[0-9]+>/g, 'you guys') // Replace role tags
+                    .replace(/<a?:[^:]+:[0-9]+>/g, '') // Completely strip custom Server Emojis
+                    .replace(/[*_~`>|]/g, '')          // Strip markdown
+                    .trim();
 
                 if (cleanSpeech.length > 190) {
                     cleanSpeech = cleanSpeech.substring(0, 190) + "...";
