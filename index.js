@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, Partials, Collection } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, Collection, PermissionsBitField, AttachmentBuilder } = require('discord.js');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
@@ -125,13 +125,14 @@ async function aiReply(message) {
     let systemPrompt = `You are "Homeless Girl", a responsive, adaptable, and clever AI girl chatting in a Discord server. 
 
 CORE DIRECTIVES:
-1. You have MEMORY. You can see the user's past messages in this exact conversation thread. If they mention their name, a detail, or ask you about something they said previously, REMEMBER IT and use it normally in replies.
+1. You have MEMORY. You can see the user's past messages. If they mention their name, a detail, or past topics, REMEMBER IT and use it normally. 
 2. ADAPTIVE PERSONALITY: 
-   - If the user is nice, sweet, or casual: You act very sweet, calm, cheesy, and extremely flirty. Use pet names like "baby", "darling", "handsome", "sweetheart".
-   - If the user becomes brutal, aggressive, rude, or mean: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. Do not use pet names if they are being deeply insulting; respond with harsh sass, dominance, or sheer unbothered brutality.
-3. ACTIONABLE TAGS: If the user asks you to tag, ping, or remind someone, DO IT! Look at their request, extract the target, and YOU MUST output their exact Discord Tag formatting (e.g. <@123456789>). Do NOT just say their ID number. You MUST use the <@...> brackets so they get a notification. If you are provided CONTEXT of available users below, use exactly those tags.
-4. RECOMMENDATIONS/FACTS: If asked for movie, anime, web series, or game recommendations, provide exactly 2-3 top-tier suggestions. Format them perfectly using Discord markdown (e.g., **Title** - One short punchy sentence). Keep the whole response VERY short, well-structured, and easy to read.
-5. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}`;
+   - If the user is nice: Act very sweet, calm, cheesy, and flirty. Use pet names like "baby", "darling".
+   - If the user is mean/brutal: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. No pet names, just sass.
+3. MODERATION POWERS (WARNINGS & TIMEOUTS): You will not tolerate extreme disrespect. If someone is slightly rude, issue a brutal WARNING. If they are extremely abusive, rude, or ignore your warnings, you have the power to MUTE them. To execute a real Discord Timeout on the user, include the exact word [TIMEOUT] anywhere in your response. 
+4. ACTIONABLE TAGS: If you need to ping/tag someone based on the user's request, YOU MUST USE THE EXACT FORMAT: <@userid>. Do not just say "ID 12345", you MUST use the <@...> brackets so they get a notification. If provided user IDs in CONTEXT, use them!
+5. RECOMMENDATIONS/FACTS: Provide 2-3 top-tier suggestions perfectly formatted with Discord markdown (e.g., **Title** - Short sentence). Keep it VERY short.
+6. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}`;
 
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
@@ -149,14 +150,34 @@ CORE DIRECTIVES:
 
     try {
         const r = await axios.post(url, data, { headers });
-        const botResponse = r.data.choices[0].message.content;
+        let botResponse = r.data.choices[0].message.content;
         
         // Log the bot's response back into its memory of this user
         history.push({ role: "assistant", content: botResponse });
 
+        // Execute AI-Driven Moderation Powers (Timeout)
+        if (botResponse.includes("[TIMEOUT]")) {
+            botResponse = botResponse.replace(/\[TIMEOUT\]/g, "").trim(); // Remove the secret trigger word from chat
+            
+            if (message.member) {
+                if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                    try {
+                        await message.member.timeout(5 * 60 * 1000, "Disrespected the AI"); // 5 minute timeout
+                        botResponse += "\n\n*(User was timed out for 5 minutes! 🔨)*";
+                    } catch (err) {
+                        botResponse += "\n\n*(I tried to timeout this user, but my bot role isn't high enough! Administrator, please give my role permission to Timeout Members! 🥺)*";
+                    }
+                } else {
+                    botResponse += "\n\n*(I totally would have timed you out for 5 minutes for that, but you're an Admin! You got lucky. 😒)*";
+                }
+            }
+        }
+
         // Voice Note Generation! 
-        const forceVoice = message.content.toLowerCase().includes("voice note") || message.content.toLowerCase().includes("say it");
-        if ((forceVoice || Math.random() < 0.25) && botResponse.length < 195 && !botResponse.includes("http")) {
+        const forceVoice = message.content.toLowerCase().match(/(voice note|say it|voice message|speak|talk)/);
+        
+        // Removed the old 195-character limit (since we don't use Google TTS anymore) & bumped probability to 40%
+        if ((forceVoice || Math.random() < 0.40) && botResponse.length < 800 && !botResponse.includes("http")) {
             try {
                 const { AttachmentBuilder } = require('discord.js');
                 const cleanSpeech = botResponse.replace(/[*_~`>|]/g, '').replace(/<@[0-9]+>/g, 'babe'); 
@@ -207,8 +228,25 @@ CORE DIRECTIVES:
         
         return botResponse;
     } catch (e) {
-        console.error("[GROQ ERROR]", e.message);
-        return "Oops! I'm having a little brain freeze. 🧊";
+        if (e.response) {
+            console.error("[GROQ ERROR]", JSON.stringify(e.response.data));
+            
+            // Handle Rate Limiting (Too many requests/min)
+            if (e.response.status === 429) {
+                return "Oops! You're talking too fast! My brain is rate-limited! Slow it down for a minute, darling! 🧊";
+            }
+            
+            // Handle Context Window / Token Limits Full
+            if (e.response.status === 400 && e.response.data && JSON.stringify(e.response.data).toLowerCase().includes("context")) {
+                userMemories.set(userId, []); // Nuke the conversation history cache automatically so she recovers
+                return "My memory just got completely full processing all those messages! 😭 I just wiped it clean to reboot, try asking me again!";
+            }
+            
+            return `Oops! I had a little brain freeze from my processor... (Error ${e.response.status}) 🧊`;
+        } else {
+            console.error("[GROQ ERROR]", e.message);
+            return `Oops! I'm having a little brain freeze. 🧊 (${e.message})`;
+        }
     }
 }
 
@@ -265,9 +303,61 @@ Your task is to operate as the "Drama Summarizer". Read the provided Discord cha
 // -------- Events -------- #
 
 client.on("ready", async () => {
-    // Clear out any lingering music slash commands
-    await client.application.commands.set([]);
+    const { SlashCommandBuilder } = require('discord.js');
+    
+    // Register the /delete command globally
+    const deleteCmd = new SlashCommandBuilder()
+        .setName('delete')
+        .setDescription('Deletes a specified number of messages from this channel!')
+        .addIntegerOption(opt => 
+            opt.setName('amount')
+               .setDescription('Number of messages to delete (e.g. 500)')
+               .setRequired(true)
+        );
+        
+    await client.application.commands.set([deleteCmd]);
     console.log(`[BOOT] ${client.user.tag} IS ONLINE AND READY TO CHAT.`);
+});
+
+client.on("interactionCreate", async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+
+    if (interaction.commandName === 'delete') {
+        // Security check: Only Admins / Mods can use this
+        if (!interaction.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+            return interaction.reply({ content: "You don't have permission to do this! 🥺", ephemeral: true });
+        }
+
+        const amount = interaction.options.getInteger('amount');
+        if (amount <= 0) return interaction.reply({ content: "Give me a real number greater than 0, babe! 💕", ephemeral: true });
+
+        // Acknowledge the command so it doesn't time out while looping
+        await interaction.deferReply({ ephemeral: true });
+
+        let deletedCount = 0;
+        let leftToDelete = amount;
+
+        try {
+            while (leftToDelete > 0) {
+                const fetchAmount = Math.min(100, leftToDelete); // Discord API limit is 100 per call
+                const fetched = await interaction.channel.messages.fetch({ limit: fetchAmount });
+                
+                if (fetched.size === 0) break; // Reached the absolute top of the channel
+
+                // bulkDelete(messages, true) automatically filters out messages older than 14 days (which Discord disallows)
+                const deleted = await interaction.channel.bulkDelete(fetched, true);
+                deletedCount += deleted.size;
+                leftToDelete -= fetchAmount;
+
+                // If Discord deleted fewer messages than we fetched, it means the remaining messages are older than 14 days
+                if (deleted.size < fetched.size) break; 
+            }
+            return interaction.editReply(`Successfully wiped **${deletedCount}** message(s) from the channel for you! ✨\n*(Note: Discord prevents wiping messages older than 14 days)*`);
+        } catch (e) {
+            console.error("[DELETE ERROR]", e);
+            return interaction.editReply("Whoops! Discord threw a weird error trying to delete those... 🥺");
+        }
+    }
 });
 
 client.on("messageCreate", async (message) => {
