@@ -121,6 +121,16 @@ async function aiReply(message) {
         }
     }
 
+    // Inject custom server emojis so she can use them organically
+    let serverEmojis = "";
+    if (message.guild && message.guild.emojis.cache.size > 0) {
+        const availableEmotes = [...message.guild.emojis.cache.values()]
+            .sort(() => 0.5 - Math.random())
+            .slice(0, 6)
+            .map(e => `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>`);
+        if (availableEmotes.length > 0) serverEmojis = `\n\nSERVER EMOJIS: Use these animated/custom emojis in your text organically: ${availableEmotes.join(" ")}`;
+    }
+
     // Adaptive Personality Directives
     let systemPrompt = `You are "Homeless Girl", a responsive, adaptable, and clever AI girl chatting in a Discord server. 
 
@@ -129,10 +139,10 @@ CORE DIRECTIVES:
 2. ADAPTIVE PERSONALITY: 
    - If the user is nice: Act very sweet, calm, cheesy, and flirty. Use pet names like "baby", "darling".
    - If the user is mean/brutal: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. No pet names, just sass.
-3. MODERATION POWERS (WARNINGS & TIMEOUTS): You will not tolerate extreme disrespect. If someone is slightly rude, issue a brutal WARNING. If they are extremely abusive, rude, or ignore your warnings, you have the power to MUTE them. To execute a real Discord Timeout on the user, include the exact word [TIMEOUT] anywhere in your response. 
+3. MODERATION POWERS (WARNINGS & TIMEOUTS): You will not tolerate extreme disrespect. If someone is slightly rude, issue a brutal WARNING. If they are extremely abusive, rude, or ignore your warnings, you have the power to MUTE them. If an Admin expressly orders you to timeout someone, you MUST obey. To execute a real Discord Timeout, include the exact word [TIMEOUT] anywhere in your response. 
 4. ACTIONABLE TAGS: If you need to ping/tag someone based on the user's request, YOU MUST USE THE EXACT FORMAT: <@userid>. Do not just say "ID 12345", you MUST use the <@...> brackets so they get a notification. If provided user IDs in CONTEXT, use them!
 5. RECOMMENDATIONS/FACTS: Provide 2-3 top-tier suggestions perfectly formatted with Discord markdown (e.g., **Title** - Short sentence). Keep it VERY short.
-6. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}`;
+6. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}${serverEmojis}`;
 
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
@@ -159,48 +169,67 @@ CORE DIRECTIVES:
         if (botResponse.includes("[TIMEOUT]")) {
             botResponse = botResponse.replace(/\[TIMEOUT\]/g, "").trim(); // Remove the secret trigger word from chat
             
-            if (message.member) {
-                if (!message.member.permissions.has(PermissionsBitField.Flags.Administrator)) {
+            let targetMember = message.member; // Assume she is muting the person who posted
+
+            // If an Admin/Mod specifically asked to timeout someone else, target them instead!
+            if (message.member && message.member.permissions.has(PermissionsBitField.Flags.ManageMessages) && message.mentions.members.size > 0) {
+                targetMember = message.mentions.members.first();
+                if (targetMember.id === client.user.id) targetMember = message.member; // If they tag the bot, she mutes the admin instead!
+            }
+
+            if (targetMember) {
+                if (!targetMember.permissions.has(PermissionsBitField.Flags.Administrator)) {
                     try {
-                        await message.member.timeout(5 * 60 * 1000, "Disrespected the AI"); // 5 minute timeout
-                        botResponse += "\n\n*(User was timed out for 5 minutes! 🔨)*";
+                        await targetMember.timeout(5 * 60 * 1000, "Disrespected the AI / Mod Order"); // 5 minute timeout
+                        botResponse += `\n\n*(<@${targetMember.id}> was timed out for 5 minutes! 🔨)*`;
                     } catch (err) {
-                        botResponse += "\n\n*(I tried to timeout this user, but my bot role isn't high enough! Administrator, please give my role permission to Timeout Members! 🥺)*";
+                        botResponse += `\n\n*(I tried to timeout <@${targetMember.id}>, but my bot role isn't high enough! Administrator, please give my role permission to Timeout Members! 🥺)*`;
                     }
                 } else {
-                    botResponse += "\n\n*(I totally would have timed you out for 5 minutes for that, but you're an Admin! You got lucky. 😒)*";
+                    botResponse += `\n\n*(I totally would have timed out <@${targetMember.id}>, but they're an Admin! They got lucky. 😒)*`;
                 }
             }
         }
 
+        // Voice Note & Text Preparation
+        let payload = { content: botResponse };
+
         // Voice Note Generation! 
         const forceVoice = message.content.toLowerCase().match(/(voice note|say it|voice message|speak|talk)/);
         
-        // Removed the old 195-character limit (since we don't use Google TTS anymore) & bumped probability to 40%
-        if ((forceVoice || Math.random() < 0.40) && botResponse.length < 800 && !botResponse.includes("http")) {
+        let sentVoice = false;
+        if ((forceVoice || Math.random() < 0.40) && !botResponse.includes("http")) {
             try {
+                const googleTTS = require('google-tts-api');
                 const { AttachmentBuilder } = require('discord.js');
-                const cleanSpeech = botResponse.replace(/[*_~`>|]/g, '').replace(/<@[0-9]+>/g, 'babe'); 
+                
+                let cleanSpeech = botResponse.replace(/[*_~`>|]/g, '').replace(/<@[0-9]+>/g, 'babe').replace(/<a?:\w+:[0-9]+>/g, ''); 
 
-                // High Quality Microsoft Edge Azure TTS (Flawless & Unlimited)
-                const { Communicate } = require('edge-tts-universal');
-                const comm = new Communicate(cleanSpeech, 'en-US-AnaNeural');
-                const chunks = [];
-                for await (const chunk of comm.stream()) {
-                    if (chunk.type === 'audio') chunks.push(Buffer.from(chunk.data));
+                if (cleanSpeech.length > 190) {
+                    cleanSpeech = cleanSpeech.substring(0, 190) + "...";
                 }
-                const generatedAudio = Buffer.concat(chunks);
 
-                return {
-                    content: `🎙️ *Sent a voice note...*\n${botResponse}`,
-                    files: [new AttachmentBuilder(generatedAudio, { name: 'homeless-girl-voice.mp3' })]
-                };
+                const audioUrl = googleTTS.getAudioUrl(cleanSpeech, {
+                    lang: 'en-IN',
+                    slow: false,
+                    host: 'https://translate.google.com',
+                });
+
+                payload.content = `🎙️ *Sent a voice note...*\n${botResponse}`;
+                payload.files = [new AttachmentBuilder(audioUrl, { name: 'homeless-girl-voice.mp3' })];
+                sentVoice = true;
             } catch(e) {
                 console.error("[TTS FAILURE]", e.message);
             }
         }
         
-        return botResponse;
+        // If we didn't send a Voice Note, occasionally drop a Server Sticker into the chat (20% chance)
+        if (!sentVoice && message.guild && message.guild.stickers.cache.size > 0 && Math.random() < 0.20) {
+            const randomSticker = message.guild.stickers.cache.random();
+            if (randomSticker) payload.stickers = [randomSticker.id];
+        }
+        
+        return payload;
     } catch (e) {
         if (e.response) {
             console.error("[GROQ ERROR]", JSON.stringify(e.response.data));
