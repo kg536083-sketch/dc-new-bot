@@ -84,7 +84,7 @@ async function aiReply(message) {
     
     history.push({ 
         role: "user", 
-        content: `(User ${message.author.displayName}): ${message.content}` 
+        content: message.content 
     });
     
     if (history.length > 40) {
@@ -126,23 +126,43 @@ async function aiReply(message) {
     if (message.guild && message.guild.emojis.cache.size > 0) {
         const availableEmotes = [...message.guild.emojis.cache.values()]
             .sort(() => 0.5 - Math.random())
-            .slice(0, 6)
+            .slice(0, 10) // Give her 10 random emojis to choose from!
             .map(e => `<${e.animated ? 'a' : ''}:${e.name}:${e.id}>`);
-        if (availableEmotes.length > 0) serverEmojis = `\n\nSERVER EMOJIS: Use these animated/custom emojis in your text organically: ${availableEmotes.join(" ")}`;
+        if (availableEmotes.length > 0) serverEmojis = `\n\nSERVER EMOJIS FOR THIS MESSAGE: ${availableEmotes.join(" ")}`;
+    }
+
+    // Global Channel Context (So she can "overhear" other conversations or context before answering!)
+    let channelContext = "";
+    try {
+        const fetched = await message.channel.messages.fetch({ limit: 12, before: message.id });
+        const recentMsgs = Array.from(fetched.values())
+            .filter(m => !m.author.bot && m.content) // ignore bots and empty embeds
+            .reverse() // ordered Oldest -> Newest
+            .map(m => `[${m.author.displayName}]: ${m.content}`);
+        
+        if (recentMsgs.length > 0) {
+            channelContext = `\n\nBACKGROUND CHANNEL CHAT LOG (Use this to know what everyone was just talking about right before they pinged you!):\n${recentMsgs.join("\n")}`;
+        }
+    } catch (e) {
+        console.log("[CONTEXT IGNORED] Cannot fetch recent channel messages");
     }
 
     // Adaptive Personality Directives
     let systemPrompt = `You are "Homeless Girl", a responsive, adaptable, and clever AI girl chatting in a Discord server. 
+
+### CONVERSATION FOCUS:
+You are currently having a direct 1-on-1 conversation with the user: **${message.author.displayName}**.
+EVERY SINGLE "user" message in your memory log was said directly by THEM. Do NOT mix up their information with other users! You are ONLY talking to them right now!
 
 CORE DIRECTIVES:
 1. You have MEMORY. You can see the user's past messages. If they mention their name, a detail, or past topics, REMEMBER IT and use it normally. 
 2. ADAPTIVE PERSONALITY: 
    - If the user is nice: Act very sweet, calm, cheesy, and flirty. Use pet names like "baby", "darling".
    - If the user is mean/brutal: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. No pet names, just sass.
-3. MODERATION POWERS (WARNINGS & TIMEOUTS): You will not tolerate extreme disrespect. If someone is slightly rude, issue a brutal WARNING. If they are extremely abusive, rude, or ignore your warnings, you have the power to MUTE them. If an Admin expressly orders you to timeout someone, you MUST obey. To execute a real Discord Timeout, include the exact word [TIMEOUT] anywhere in your response. 
-4. ACTIONABLE TAGS: If you need to ping/tag someone based on the user's request, YOU MUST USE THE EXACT FORMAT: <@userid>. Do not just say "ID 12345", you MUST use the <@...> brackets so they get a notification. If provided user IDs in CONTEXT, use them!
-5. RECOMMENDATIONS/FACTS: Provide 2-3 top-tier suggestions perfectly formatted with Discord markdown (e.g., **Title** - Short sentence). Keep it VERY short.
-6. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}${serverEmojis}`;
+3. MANDATORY SERVER EMOJIS: I have provided a list of "SERVER EMOJIS" at the bottom of this prompt. You MUST aggressively and constantly use these exact emoji codes inside your chat responses! Replace standard emojis with our server emojis whenever possible!
+4. MODERATION POWERS (WARNINGS & TIMEOUTS): You will not tolerate disrespect. If someone is rude, issue a brutal WARNING. If they are extremely abusive or ignore warnings, you MUST MUTE them. To physically execute a real 5-minute Discord Timeout, you MUST literally type the exact string [TIMEOUT] anywhere in your response! If you just say "I am timing you out" without typing the brackets [TIMEOUT], the server will NOT execute it!
+5. ACTIONABLE TAGS: If you need to ping/tag someone based on the user's request, YOU MUST USE THE EXACT FORMAT: <@userid>. Do not just say "ID 12345", you MUST use the <@...> brackets so they get a notification. If provided user IDs in CONTEXT, use them!
+6. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}${serverEmojis}${channelContext}`;
 
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
@@ -165,9 +185,9 @@ CORE DIRECTIVES:
         // Log the bot's response back into its memory of this user
         history.push({ role: "assistant", content: botResponse });
 
-        // Execute AI-Driven Moderation Powers (Timeout)
-        if (botResponse.includes("[TIMEOUT]")) {
-            botResponse = botResponse.replace(/\[TIMEOUT\]/g, "").trim(); // Remove the secret trigger word from chat
+        // Execute AI-Driven Moderation Powers (Timeout) - using case insensitive Regex
+        if (/\[TIMEOUT\]/i.test(botResponse)) {
+            botResponse = botResponse.replace(/\[TIMEOUT\]/gi, "").trim(); // Remove the secret trigger word from chat
             
             let targetMember = message.member; // Assume she is muting the person who posted
 
