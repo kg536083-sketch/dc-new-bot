@@ -152,29 +152,42 @@ CORE DIRECTIVES:
         history.push({ role: "assistant", content: botResponse });
 
         // Voice Note Generation! 
-        // 20% chance to send audio naturally, OR 100% chance if the user explicitly asks for "voice note" / "say it"
         const forceVoice = message.content.toLowerCase().includes("voice note") || message.content.toLowerCase().includes("say it");
         if ((forceVoice || Math.random() < 0.25) && botResponse.length < 195 && !botResponse.includes("http")) {
             try {
-                const googleTTS = require('google-tts-api'); // Free TTS Engine
                 const { AttachmentBuilder } = require('discord.js');
-                
-                // Strip discord markup and emojis so TTS doesn't read the literal asterisk characters
                 const cleanSpeech = botResponse.replace(/[*_~`>|]/g, '').replace(/<@[0-9]+>/g, 'babe'); 
 
-                const audioUrl = googleTTS.getAudioUrl(cleanSpeech, {
-                    lang: 'en-IN',
-                    slow: false,
-                    host: 'https://translate.google.com',
-                });
+                if (process.env.ELEVENLABS_API_KEY) {
+                    // Premium ElevenLabs Voice ("Mimi" - incredibly cute, expressive, high-pitched anime-like voice)
+                    const voiceId = "zrHiDhphv9ZnVBTiNycL"; 
+                    const ttsUrl = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`;
+                    
+                    const audioRes = await axios.post(ttsUrl, {
+                        text: cleanSpeech,
+                        model_id: "eleven_multilingual_v2",
+                        voice_settings: { stability: 0.35, similarity_boost: 0.85, style: 0.0, use_speaker_boost: true }
+                    }, {
+                        headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
+                        responseType: 'arraybuffer'
+                    });
 
-                return {
-                    content: `🎙️ *Sent a voice note...*\n${botResponse}`,
-                    files: [new AttachmentBuilder(audioUrl, { name: 'homeless-girl-voice.mp3' })]
-                };
+                    return {
+                        content: `🎙️ *Sent a voice note...*\n${botResponse}`,
+                        files: [new AttachmentBuilder(Buffer.from(audioRes.data), { name: 'homeless-girl-cute.mp3' })]
+                    };
+                } else {
+                    // Free Fallback: Google TTS
+                    const googleTTS = require('google-tts-api');
+                    const audioUrl = googleTTS.getAudioUrl(cleanSpeech, { lang: 'en-IN', slow: false });
+                    return {
+                        content: `🎙️ *Sent a voice note...*\n${botResponse}`,
+                        files: [new AttachmentBuilder(audioUrl, { name: 'homeless-girl-voice.mp3' })]
+                    };
+                }
             } catch(e) {
-                console.error("[TTS ERROR]", e);
-                // Fall back to regular text if TTS generation fails
+                console.error("[TTS ERROR]", e.message);
+                // Fall back to regular text if API generation hits a limit
             }
         }
         
