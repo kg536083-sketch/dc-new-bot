@@ -159,10 +159,11 @@ CORE DIRECTIVES:
 2. ADAPTIVE PERSONALITY: 
    - If the user is nice: Act very sweet, calm, cheesy, and flirty. Use pet names like "baby", "darling".
    - If the user is mean/brutal: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. No pet names, just sass.
-3. MANDATORY SERVER EMOJIS: I have provided a list of "SERVER EMOJIS" at the bottom of this prompt. You MUST aggressively and constantly use these exact emoji codes inside your chat responses! Replace standard emojis with our server emojis whenever possible!
-4. MODERATION POWERS (WARNINGS & TIMEOUTS): You will not tolerate disrespect. If someone is rude, issue a brutal WARNING. If they are extremely abusive or ignore warnings, you MUST MUTE them. To physically execute a real 5-minute Discord Timeout, you MUST literally type the exact string [TIMEOUT] anywhere in your response! If you just say "I am timing you out" without typing the brackets [TIMEOUT], the server will NOT execute it!
+3. EMOJI RESTRICTION: You are FORBIDDEN from using default Unicode emojis (like 🥺, 😂, 💕, ✨). You MUST STRICTLY AND ONLY use the custom "SERVER EMOJIS" provided at the bottom of this prompt! Never use a standard emoji!
+4. MODERATION POWERS (ADMIN TIMEOUTS): If an Admin commands you to MUTE or TIMEOUT a specific tagged user, you MUST obey! To physically execute a real 5-minute Discord Timeout against the tagged person, you MUST literally type the exact strictly formatted string [TIMEOUT] anywhere in your response! You DO NOT have permission to mute users autonomously, only when explicitly ordered by an Admin!
 5. ACTIONABLE TAGS: If you need to ping/tag someone based on the user's request, YOU MUST USE THE EXACT FORMAT: <@userid>. Do not just say "ID 12345", you MUST use the <@...> brackets so they get a notification. If provided user IDs in CONTEXT, use them!
-6. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}${serverEmojis}${channelContext}`;
+6. TENOR GIFS: You have the ability to send animated GIFs! To do this, simply include the string [GIF: keyword] anywhere in your response (e.g. "[GIF: laughing cat]" or "[GIF: angry anime girl]"). Use this sometimes to make your chats more visually expressive!
+7. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}${serverEmojis}${channelContext}`;
 
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
@@ -185,29 +186,47 @@ CORE DIRECTIVES:
         // Log the bot's response back into its memory of this user
         history.push({ role: "assistant", content: botResponse });
 
-        // Execute AI-Driven Moderation Powers (Timeout) - using case insensitive Regex
+        // Execute AI-Driven Moderation Powers (Timeout) - restricted strictly to Admins
         if (/\[TIMEOUT\]/i.test(botResponse)) {
             botResponse = botResponse.replace(/\[TIMEOUT\]/gi, "").trim(); // Remove the secret trigger word from chat
             
-            let targetMember = message.member; // Assume she is muting the person who posted
-
-            // If an Admin/Mod specifically asked to timeout someone else, target them instead!
-            if (message.member && message.member.permissions.has(PermissionsBitField.Flags.ManageMessages) && message.mentions.members.size > 0) {
-                targetMember = message.mentions.members.first();
-                if (targetMember.id === client.user.id) targetMember = message.member; // If they tag the bot, she mutes the admin instead!
-            }
-
-            if (targetMember) {
-                if (!targetMember.permissions.has(PermissionsBitField.Flags.Administrator)) {
-                    try {
-                        await targetMember.timeout(5 * 60 * 1000, "Disrespected the AI / Mod Order"); // 5 minute timeout
-                        botResponse += `\n\n*(<@${targetMember.id}> was timed out for 5 minutes! 🔨)*`;
-                    } catch (err) {
-                        botResponse += `\n\n*(I tried to timeout <@${targetMember.id}>, but my bot role isn't high enough! Administrator, please give my role permission to Timeout Members! 🥺)*`;
+            // SECURITY: Only allow Admins / Moderators to trigger this feature
+            if (message.member && message.member.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+                
+                // Smart Targeting: Find the first tagged user in the chat that is NOT the bot herself
+                const targetMember = message.mentions.members.find(m => m.id !== client.user.id);
+                
+                if (targetMember) {
+                    if (!targetMember.permissions.has(PermissionsBitField.Flags.Administrator)) {
+                        try {
+                            await targetMember.timeout(5 * 60 * 1000, "Admin requested timeout via AI"); // 5 minute timeout
+                            botResponse += `\n\n*(<@${targetMember.id}> was timed out for 5 minutes! 🔨)*`;
+                        } catch (err) {
+                            botResponse += `\n\n*(I tried to timeout <@${targetMember.id}>, but my bot role isn't high enough! Administrator, please give my role permission to Timeout Members! 🥺)*`;
+                        }
+                    } else {
+                        botResponse += `\n\n*(I totally would have timed out <@${targetMember.id}>, but they're an Admin! They got lucky. 😒)*`;
                     }
                 } else {
-                    botResponse += `\n\n*(I totally would have timed out <@${targetMember.id}>, but they're an Admin! They got lucky. 😒)*`;
+                    botResponse += "\n\n*(You told me to timeout somebody, but you didn't tag them properly! 🤨)*";
                 }
+            } else {
+                botResponse += "\n\n*(You tried to make me timeout someone, but you aren't an Admin! Nice try! 💅)*";
+            }
+        }
+
+        // Execute AI-Driven Tenor GIF Engine
+        const gifMatch = botResponse.match(/\[GIF:\s*(.+?)\]/i);
+        if (gifMatch) {
+            botResponse = botResponse.replace(gifMatch[0], "").trim(); // Hide the command from chat
+            try {
+                const gifQuery = gifMatch[1].trim();
+                const tenorRes = await axios.get(`https://g.tenor.com/v1/search?q=${encodeURIComponent(gifQuery)}&key=LIVDSRZULELA&limit=1`);
+                if (tenorRes.data.results && tenorRes.data.results.length > 0) {
+                    botResponse += `\n${tenorRes.data.results[0].url}`; // Automatically inject the GIF link into her text
+                }
+            } catch (e) {
+                console.error("[GIF ERROR] Failed to fetch. (Tenor API or Network)", e.message);
             }
         }
 
