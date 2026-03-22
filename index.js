@@ -87,20 +87,23 @@ async function aiReply(message) {
         content: `(User ${message.author.displayName}): ${message.content}` 
     });
     
-    if (history.length > 12) {
+    if (history.length > 40) {
         history.shift(); 
         history.shift(); 
     }
 
-    // Smart Tagging / Ping Context
-    const words = message.content.toLowerCase().split(/\s+/);
+    // Smart Tagging / Ping Context Generation (Fixed to prevent wrong tags)
+    const words = message.content.toLowerCase().split(/[^a-z0-9]/).filter(w => w.length > 2);
+    const ignoreWords = ['and', 'the', 'for', 'you', 'him', 'her', 'bot', 'this', 'that', 'she', 'how', 'who', 'what', 'why', 'are', 'not', 'can', 'will'];
     const potentialTags = [];
+    
     if (message.guild) {
         message.guild.members.cache.forEach(member => {
             const username = member.user.username.toLowerCase();
             const nick = member.displayName.toLowerCase();
-            if (words.some(w => w.length > 2 && (username.includes(w) || nick.includes(w)))) {
-                potentialTags.push(`${member.displayName} (tag: <@${member.id}>)`);
+            // Stricter matching: exact word match for username or any part of the nickname
+            if (words.some(w => !ignoreWords.includes(w) && (username === w || nick.split(' ').some(n => n.toLowerCase() === w)))) {
+                potentialTags.push(`${member.displayName}: <@${member.id}>`);
             }
         });
     }
@@ -126,7 +129,7 @@ CORE DIRECTIVES:
 2. ADAPTIVE PERSONALITY: 
    - If the user is nice, sweet, or casual: You act very sweet, calm, cheesy, and extremely flirty. Use pet names like "baby", "darling", "handsome", "sweetheart".
    - If the user becomes brutal, aggressive, rude, or mean: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. Do not use pet names if they are being deeply insulting; respond with harsh sass, dominance, or sheer unbothered brutality.
-3. ACTIONABLE TAGS: If the user asks you to tag, ping, or remind someone, DO IT! Look at their request, extract the target, and place their exact Discord Tag (e.g. <@123456789>) in your response so they get a notification. If you are provided CONTEXT of available users, use the provided '<@...>' tags exactly as written.
+3. ACTIONABLE TAGS: If the user asks you to tag, ping, or remind someone, DO IT! Look at their request, extract the target, and YOU MUST output their exact Discord Tag formatting (e.g. <@123456789>). Do NOT just say their ID number. You MUST use the <@...> brackets so they get a notification. If you are provided CONTEXT of available users below, use exactly those tags.
 4. RECOMMENDATIONS/FACTS: If asked for movie, anime, web series, or game recommendations, provide exactly 2-3 top-tier suggestions. Format them perfectly using Discord markdown (e.g., **Title** - One short punchy sentence). Keep the whole response VERY short, well-structured, and easy to read.
 5. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}`;
 
@@ -177,12 +180,18 @@ CORE DIRECTIVES:
                         files: [new AttachmentBuilder(Buffer.from(audioRes.data), { name: 'homeless-girl-cute.mp3' })]
                     };
                 } else {
-                    // Free Fallback: Google TTS
-                    const googleTTS = require('google-tts-api');
-                    const audioUrl = googleTTS.getAudioUrl(cleanSpeech, { lang: 'en-IN', slow: false });
+                    // Free Fallback: High Quality Microsoft Edge Azure TTS 
+                    const { Communicate } = require('edge-tts-universal');
+                    const comm = new Communicate(cleanSpeech, 'en-US-AnaNeural');
+                    const chunks = [];
+                    for await (const chunk of comm.stream()) {
+                        if (chunk.type === 'audio') chunks.push(Buffer.from(chunk.data));
+                    }
+                    const fullBuffer = Buffer.concat(chunks);
+                    
                     return {
                         content: `🎙️ *Sent a voice note...*\n${botResponse}`,
-                        files: [new AttachmentBuilder(audioUrl, { name: 'homeless-girl-voice.mp3' })]
+                        files: [new AttachmentBuilder(fullBuffer, { name: 'homeless-girl-voice.mp3' })]
                     };
                 }
             } catch(e) {
