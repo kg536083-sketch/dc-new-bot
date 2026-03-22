@@ -237,7 +237,7 @@ CORE DIRECTIVES:
         const forceVoice = message.content.toLowerCase().match(/(voice note|say it|voice message|speak|talk)/);
         
         let sentVoice = false;
-        if ((forceVoice || Math.random() < 0.40) && !botResponse.includes("http")) {
+        if ((forceVoice || Math.random() < 0.15) && !botResponse.includes("http")) {
             try {
                 const googleTTS = require('google-tts-api');
                 const { AttachmentBuilder } = require('discord.js');
