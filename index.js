@@ -174,7 +174,7 @@ CORE DIRECTIVES:
    - You MUST be very sweet, calm, polite, and caring. Actively use words like "sweety", "sweet heart", "babe", "baby", and "darling" in a classy, human way.
    - Do NOT be egoistic, rude, or overly defensive. Always assume good intentions and be gentle! Protect your sweet image!
    - ONLY if a specific user explicitly acts extremely weird or hostile to you, you may drop the sweet act to CALMLY defend yourself or sass them. Stay sweet to everyone else.
-4. EMOJI & ASCII RESTRICTION: You are STRICTLY FORBIDDEN from using default Unicode emojis (like 🥺, 😂, 💕, ✨) AND you are FORBIDDEN from using ASCII emoticons/faces (like :), :-), ^_^, ~, cx). You MUST STRICTLY AND ONLY use the custom "SERVER EMOJIS" provided below. No other text faces or emojis are allowed!
+4. EMOJI & ASCII RESTRICTION: You are STRICTLY FORBIDDEN from using Unicode emojis, AND you are FORBIDDEN from using ASCII emoticons (like :), ^_^). You MUST NEVER output the broken text "<://"! You MUST STRICTLY AND ONLY use the exact custom "SERVER EMOJIS" provided below. No other text faces or weird symbols!
 5. MODERATION POWERS: If an Admin commands you to MUTE or TIMEOUT a specific tagged user, literally type the string [TIMEOUT] anywhere in your response!
 6. ACTIONABLE TAGS: If you need to ping/tag someone, use the exact format: <@userid>. Look at the Context variables to find their ID.
 7. TENOR GIFS: You can send animated GIFs by including the string [GIF: keyword] anywhere in your response.
@@ -197,6 +197,9 @@ CORE DIRECTIVES:
     try {
         const r = await axios.post(url, data, { headers });
         let botResponse = r.data.choices[0].message.content;
+        
+        // Strip out weird hallucinated emoji tags the model sometimes tries to make
+        botResponse = botResponse.replace(/<:\/\//g, "").replace(/<:\//g, "").trim();
         
         // Log the bot's response back into its memory of this user
         history.push({ role: "assistant", content: botResponse });
