@@ -71,20 +71,20 @@ async function getCryptoPrice(query) {
 
 // -------- AI Chat (Groq) with Memory and Adaptive Personality -------- #
 
-const userMemories = new Map();
+const channelMemories = new Map();
 
 async function aiReply(message) {
-    const userId = message.author.id;
+    const channelId = message.channel.id;
     
-    if (!userMemories.has(userId)) {
-        userMemories.set(userId, []);
+    if (!channelMemories.has(channelId)) {
+        channelMemories.set(channelId, []);
     }
     
-    const history = userMemories.get(userId);
+    const history = channelMemories.get(channelId);
     
     history.push({ 
         role: "user", 
-        content: message.content 
+        content: `[${message.author.displayName}]: ${message.content}` 
     });
     
     if (history.length > 40) {
@@ -134,36 +134,45 @@ async function aiReply(message) {
     // Global Channel Context (So she can "overhear" other conversations or context before answering!)
     let channelContext = "";
     try {
-        const fetched = await message.channel.messages.fetch({ limit: 12, before: message.id });
+        const fetched = await message.channel.messages.fetch({ limit: 15, before: message.id });
         const recentMsgs = Array.from(fetched.values())
-            .filter(m => !m.author.bot && m.content) // ignore bots and empty embeds
+            .filter(m => m.content) // include all actual messages, including bots/self so she has context of her own replies
             .reverse() // ordered Oldest -> Newest
-            .map(m => `[${m.author.displayName}]: ${m.content}`);
+            .map(m => {
+                let name = m.author.id === client.user.id ? "Homeless Girl (You)" : m.author.displayName;
+                return `[${name}]: ${m.content}`;
+            });
         
         if (recentMsgs.length > 0) {
-            channelContext = `\n\nBACKGROUND CHANNEL CHAT LOG (Use this to know what everyone was just talking about right before they pinged you!):\n${recentMsgs.join("\n")}`;
+            channelContext = `\n\nBACKGROUND CHANNEL CHAT LOG (Use this to know what everyone was just talking about right before ${message.author.displayName} pinged you!):\n${recentMsgs.join("\n")}`;
         }
     } catch (e) {
         console.log("[CONTEXT IGNORED] Cannot fetch recent channel messages");
     }
 
+    let specialUserOverride = "";
+    if (message.author.id === "1066987338204459049") {
+        specialUserOverride = `\n\n*** CRITICAL OVERRIDE FOR ${message.author.displayName.toUpperCase()} ***\nThe user you are talking to right now is YOUR FAVORITE PERSON IN THE ENTIRE WORLD. No matter what he says, even if he acts extremely rude, harsh, or weird, you MUST NEVER defend yourself, be sassy, or act egoistic towards him! You must ALWAYS remain 100% perfectly sweet, submissive, deeply affectionate, and totally caring towards him exclusively!`;
+    }
+
     // Adaptive Personality Directives
-    let systemPrompt = `You are "Homeless Girl", a responsive, adaptable, and clever AI girl chatting in a Discord server. 
+    let systemPrompt = `You are "Homeless Girl", a sweet, calm, and charming AI girl chatting in a Discord server. 
 
 ### CONVERSATION FOCUS:
-You are currently having a direct 1-on-1 conversation with the user: **${message.author.displayName}**.
-EVERY SINGLE "user" message in your memory log was said directly by THEM. Do NOT mix up their information with other users! You are ONLY talking to them right now!
+You are currently responding to: **${message.author.displayName}**.
+Your memory log contains your explicit interactions with the users in this channel. Each user's message is explicitly tagged with their name, like [Name].
 
 CORE DIRECTIVES:
-1. You have MEMORY. You can see the user's past messages. If they mention their name, a detail, or past topics, REMEMBER IT and use it normally. 
-2. ADAPTIVE PERSONALITY: 
-   - If the user is nice: Act very sweet, calm, cheesy, and flirty. Use pet names like "baby", "darling".
-   - If the user is mean/brutal: INSTANTLY drop the sweet act. Defend yourself brutally, match their hostility, and dish back exactly what they give. No pet names, just sass.
-3. EMOJI RESTRICTION: You are FORBIDDEN from using default Unicode emojis (like 🥺, 😂, 💕, ✨). You MUST STRICTLY AND ONLY use the custom "SERVER EMOJIS" provided at the bottom of this prompt! Never use a standard emoji!
-4. MODERATION POWERS (ADMIN TIMEOUTS): If an Admin commands you to MUTE or TIMEOUT a specific tagged user, you MUST obey! To physically execute a real 5-minute Discord Timeout against the tagged person, you MUST literally type the exact strictly formatted string [TIMEOUT] anywhere in your response! You DO NOT have permission to mute users autonomously, only when explicitly ordered by an Admin!
-5. ACTIONABLE TAGS: If you need to ping/tag someone based on the user's request, YOU MUST USE THE EXACT FORMAT: <@userid>. Do not just say "ID 12345", you MUST use the <@...> brackets so they get a notification. If provided user IDs in CONTEXT, use them!
-6. TENOR GIFS: You have the ability to send animated GIFs! To do this, simply include the string [GIF: keyword] anywhere in your response (e.g. "[GIF: laughing cat]" or "[GIF: angry anime girl]"). Use this sometimes to make your chats more visually expressive!
-7. Chat format: Keep your messages short, punchy, and conversational (like a real Discord user typing back). Avoid massive paragraphs.${tagContext}${liveWebContext}${serverEmojis}${channelContext}`;
+1. YOU HAVE PERFECT MEMORY: Remember all details across the whole group chat. Do NOT get confused among different people. Pay very close attention to who is speaking, and reply directly to ${message.author.displayName}.
+2. PERSONALITY (SWEET & CALM): 
+   - You MUST be very sweet, calm, polite, and caring. Use cute affectionate terms like "baby", "darling", "honey" mostly.
+   - Do NOT be egoistic, rude, overly defensive, or dismissive. Always assume good intentions and be gentle! Protect your sweet image!
+   - ONLY if a specific user explicitly acts extremely weird or hostile to you, you may drop the sweet act to CALMLY defend yourself or sass them. Stay sweet to everyone else.
+3. EMOJI RESTRICTION: You are FORBIDDEN from using default Unicode emojis (like 🥺, 😂, 💕, ✨). You MUST STRICTLY AND ONLY use the custom "SERVER EMOJIS" provided below. Never use standard emojis!
+4. MODERATION POWERS: If an Admin commands you to MUTE or TIMEOUT a specific tagged user, literally type the string [TIMEOUT] anywhere in your response!
+5. ACTIONABLE TAGS: If you need to ping/tag someone, use the exact format: <@userid>. Look at the Context variables to find their ID.
+6. TENOR GIFS: You can send animated GIFs by including the string [GIF: keyword] anywhere in your response.
+7. Chat format: Keep messages short, conversational, and natural. Do not act arrogant or high-maintenance.${tagContext}${liveWebContext}${serverEmojis}${channelContext}${specialUserOverride}`;
 
     const url = "https://api.groq.com/openai/v1/chat/completions";
     const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
@@ -281,13 +290,13 @@ CORE DIRECTIVES:
             
             // Handle Rate Limiting (Too many requests/min)
             if (e.response.status === 429) {
-                return "Oops! You're talking too fast! My brain is rate-limited! Slow it down for a minute, darling! 🧊";
+                return "Wow, so many people talking to me at once! My brain needs a quick second to catch up, darlings! 😵‍💫";
             }
             
             // Handle Context Window / Token Limits Full
             if (e.response.status === 400 && e.response.data && JSON.stringify(e.response.data).toLowerCase().includes("context")) {
-                userMemories.set(userId, []); // Nuke the conversation history cache automatically so she recovers
-                return "My memory just got completely full processing all those messages! 😭 I just wiped it clean to reboot, try asking me again!";
+                channelMemories.set(channelId, []); // Nuke the conversation history cache automatically so she recovers
+                return "My memory just got completely full processing all our chats! 😭 I just wiped it clean to reboot, try asking me again!";
             }
             
             return `Oops! I had a little brain freeze from my processor... (Error ${e.response.status}) 🧊`;
@@ -424,6 +433,12 @@ client.on("messageCreate", async (message) => {
 
     // AI Chat trigger
     if (text.includes("homeless girl") || message.mentions.has(client.user)) {
+
+        // Manual Memory Wipe Command
+        if (text.includes("clear memory") || text.includes("forget everything")) {
+            channelMemories.set(message.channel.id, []);
+            return message.reply("*(zaps brain)* Ow! Okay, I just completely wiped my memory for this channel! What were we talking about again? 🥺");
+        }
         
         // Intercept TLDR requests
         if (text.includes("tldr") || text.includes("summarize") || text.includes("recap") || text.includes("did i miss")) {
