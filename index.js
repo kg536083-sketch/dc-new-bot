@@ -83,36 +83,13 @@ async function aiReply(message) {
     const history = channelMemories.get(channelId);
     
     let userContent = `[${message.author.displayName}]: ${message.content}`;
-    
-    if (message.attachments.size > 0) {
-        // Find the first image attachment
-        const attachment = message.attachments.first();
-        if (attachment.contentType && attachment.contentType.startsWith('image/')) {
-            try {
-                const imgRes = await axios.get(attachment.url, { responseType: 'arraybuffer' });
-                const base64Image = Buffer.from(imgRes.data).toString('base64');
-                const mimeType = attachment.contentType;
-                
-                history.push({
-                    role: "user",
-                    content: [
-                        { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-                        { type: "text", text: userContent || "What is in this image?" }
-                    ]
-                });
-            } catch (err) {
-                console.error("[IMAGE FETCH ERROR]", err.message);
-                history.push({ role: "user", content: userContent });
-            }
-        } else {
-            history.push({ role: "user", content: userContent });
-        }
-    } else {
-        history.push({ 
-            role: "user", 
-            content: userContent 
-        });
-    }
+    // Vision API removed - sticking to text only
+
+    // Always push string to text history so Groq doesn't crash on future messages
+    history.push({ 
+        role: "user", 
+        content: userContent 
+    });
     
     if (history.length > 40) {
         history.shift(); 
@@ -205,31 +182,62 @@ CORE DIRECTIVES:
 5. MODERATION POWERS: If an Admin commands you to MUTE or TIMEOUT a specific tagged user, literally type the string [TIMEOUT] anywhere in your response!
 6. ACTIONABLE TAGS: If you need to ping/tag someone, use the exact format: <@userid>. Look at the Context variables to find their ID.
 7. TENOR GIFS: You can send animated GIFs by including the string [GIF: keyword] anywhere in your response.
-8. STRICT LENGTH LIMIT: Your replies MUST be 1 to 2 lines usually, and a MAXIMUM of 3 lines. DO NOT write longer paragraphs. Keep it short and punchy!${tagContext}${liveWebContext}${serverEmojis}${channelContext}${specialUserOverride}`;
+8. IMAGE GENERATION: If the user explicitly asks you to draw, deeply illustrate, or generate a custom picture, output the string [IMAGE: detailed prompt describing exactly what to draw] anywhere in your response!
+9. STRICT LENGTH LIMIT: Your replies MUST be 1 to 2 lines usually, and a MAXIMUM of 3 lines. DO NOT write longer paragraphs. Keep it short and punchy!${tagContext}${liveWebContext}${serverEmojis}${channelContext}${specialUserOverride}`;
 
-    const url = "https://integrate.api.nvidia.com/v1/chat/completions";
-    const headers = { 
-        "Authorization": `Bearer ${process.env.NVIDIA_API_KEY}`, 
+    // GROQ LLAMA 8B INSTANT
+    let apiUrl = "https://api.groq.com/openai/v1/chat/completions";
+    let apiHeaders = { 
+        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, 
         "Content-Type": "application/json" 
     };
     
-    // We use a model capable of vision processing
-    const data = {
-        model: "qwen/qwen3.5-122b-a10b",  
+    let apiData = {
+        model: "llama-3.1-8b-instant",  
         messages: [
             { role: "system", content: systemPrompt },
             ...history
         ],
-        max_tokens: 16384,
-        temperature: 0.60,
-        top_p: 0.95,
-        chat_template_kwargs: { enable_thinking: true }
+        temperature: 0.85,
+        max_tokens: 1024
     };
 
+    let botResponse = "";
     try {
-        const r = await axios.post(url, data, { headers });
-        let botResponse = r.data.choices[0].message.content;
-        
+        const r = await axios.post(apiUrl, apiData, { headers: apiHeaders });
+        botResponse = r.data.choices[0].message.content;
+    } catch (e) {
+        // High-Traffic Failover: If Groq rate-limits us (429), automatically failover to NVIDIA NIM!
+        if (e.response && e.response.status === 429 && apiUrl.includes("groq")) {
+            console.log("[GROQ RATE LIMIT] Falling back to NVIDIA NIM!");
+            try {
+                const nvidiaData = { ...apiData, model: "meta/llama-3.1-8b-instruct" };
+                const nvidiaHeaders = { 
+                    "Authorization": `Bearer ${process.env.NVIDIA_LLAMA_API_KEY}`, 
+                    "Content-Type": "application/json" 
+                };
+                const fb = await axios.post("https://integrate.api.nvidia.com/v1/chat/completions", nvidiaData, { headers: nvidiaHeaders });
+                botResponse = fb.data.choices[0].message.content;
+            } catch (err) {
+                return "Wow, so many people talking to me at once! My brain needs a quick second to catch up, darlings! 😵‍💫";
+            }
+        } else {
+            if (e.response) {
+                console.error("[API ERROR]", JSON.stringify(e.response.data));
+                if (e.response.status === 429) return "Wow, so many people talking to me at once! My brain needs a quick second to catch up, darlings! 😵‍💫";
+                if (e.response.status === 400 && e.response.data && JSON.stringify(e.response.data).toLowerCase().includes("context")) {
+                    channelMemories.set(channelId, []); 
+                    return "My memory just got completely full processing all our chats! 😭 I just wiped it clean to reboot, try asking me again!";
+                }
+                return `Oops! I had a little brain freeze from my processor... (Error ${e.response.status}) 🧊`;
+            } else {
+                console.error("[API ERROR]", e.message);
+                return `Oops! I'm having a little brain freeze. 🧊 (${e.message})`;
+            }
+        }
+    }
+
+    try {
         // Strip out weird hallucinated emoji tags the model sometimes tries to make
         botResponse = botResponse.replace(/<:\/\//g, "").replace(/<:\//g, "").trim();
         
@@ -280,8 +288,42 @@ CORE DIRECTIVES:
             }
         }
 
+        let imageFiles = [];
+        
+        // Execute AI-Driven Image Generation (NVIDIA Stable Diffusion 3 Medium)
+        const imgMatch = botResponse.match(/\[IMAGE:\s*(.+?)\]/i);
+        if (imgMatch) {
+            botResponse = botResponse.replace(imgMatch[0], "").trim();
+            const imgPrompt = imgMatch[1].trim();
+            try {
+                await message.channel.sendTyping();
+                // Using NVIDIA Cloud API for Free Endpoint
+                const sdRes = await axios.post("https://integrate.api.nvidia.com/v1/images/generations", {
+                    model: "stabilityai/stable-diffusion-3-medium",
+                    prompt: imgPrompt,
+                    response_format: "b64_json"
+                }, {
+                    headers: {
+                        "Authorization": `Bearer ${process.env.NVIDIA_IMAGE_API_KEY}`,
+                        "Content-Type": "application/json",
+                        "Accept": "application/json"
+                    }
+                });
+
+                if (sdRes.data && sdRes.data.data && sdRes.data.data.length > 0) {
+                    const b64Data = sdRes.data.data[0].b64_json;
+                    const buffer = Buffer.from(b64Data, 'base64');
+                    imageFiles.push(new AttachmentBuilder(buffer, { name: 'generated-image.png' }));
+                }
+            } catch (err) {
+                console.error("[IMAGE GEN ERROR]", err.response ? JSON.stringify(err.response.data) : err.message);
+                botResponse += "\n\n*(My drawing tablet crashed while trying to make that image! 😭)*";
+            }
+        }
+
         // Voice Note & Text Preparation
         let payload = { content: botResponse };
+        if (imageFiles.length > 0) payload.files = imageFiles;
 
         // Voice Note Generation! 
         const forceVoice = message.content.toLowerCase().match(/(voice note|say it|voice message|speak|talk)/);
@@ -311,7 +353,8 @@ CORE DIRECTIVES:
                 });
 
                 payload.content = `🎙️ *Sent a voice note...*\n${botResponse}`;
-                payload.files = [new AttachmentBuilder(audioUrl, { name: 'homeless-girl-voice.mp3' })];
+                if (!payload.files) payload.files = [];
+                payload.files.push(new AttachmentBuilder(audioUrl, { name: 'homeless-girl-voice.mp3' }));
                 sentVoice = true;
             } catch(e) {
                 console.error("[TTS FAILURE]", e.message);
@@ -326,25 +369,8 @@ CORE DIRECTIVES:
         
         return payload;
     } catch (e) {
-        if (e.response) {
-            console.error("[NVIDIA ERROR]", JSON.stringify(e.response.data));
-            
-            // Handle Rate Limiting (Too many requests/min)
-            if (e.response.status === 429) {
-                return "Wow, so many people talking to me at once! My brain needs a quick second to catch up, darlings! 😵‍💫";
-            }
-            
-            // Handle Context Window / Token Limits Full
-            if (e.response.status === 400 && e.response.data && JSON.stringify(e.response.data).toLowerCase().includes("context")) {
-                channelMemories.set(channelId, []); // Nuke the conversation history cache automatically so she recovers
-                return "My memory just got completely full processing all our chats! 😭 I just wiped it clean to reboot, try asking me again!";
-            }
-            
-            return `Oops! I had a little brain freeze from my processor... (Error ${e.response.status}) 🧊`;
-        } else {
-            console.error("[NVIDIA ERROR]", e.message);
-            return `Oops! I'm having a little brain freeze. 🧊 (${e.message})`;
-        }
+        console.error("[GENERIC ERROR]", e.message);
+        return "I got a little confused trying to handle that message! 😵‍💫";
     }
 }
 
@@ -377,21 +403,19 @@ Your task is to operate as the "Drama Summarizer". Read the provided Discord cha
 2. Outline the main topics of discussion.
 3. Keep your classic sweet/sassy/flirty attitude toward the user asking for the recap.`;
 
-        const url = "https://integrate.api.nvidia.com/v1/chat/completions";
+        const url = "https://api.groq.com/openai/v1/chat/completions";
         const headers = { 
-            "Authorization": `Bearer ${process.env.NVIDIA_API_KEY}`, 
+            "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, 
             "Content-Type": "application/json" 
         };
         const data = {
-            model: "qwen/qwen3.5-122b-a10b",
+            model: "llama-3.1-8b-instant",
             messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: `Hey! I just got here. What did I miss? Here's the raw chat log:\n\n${chatContext}\n\nPlease summarize the drama!` }
             ],
-            max_tokens: 16384,
-            temperature: 0.60,
-            top_p: 0.95,
-            chat_template_kwargs: { enable_thinking: true }
+            max_tokens: 400,
+            temperature: 0.70
         };
 
         const r = await axios.post(url, data, { headers });
