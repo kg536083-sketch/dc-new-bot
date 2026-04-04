@@ -174,10 +174,13 @@ CORE DIRECTIVES:
 2. READ THE ROOM & USE NAMES: 
    - You MUST deeply read the "BACKGROUND CHANNEL CHAT LOG" provided at the end of this prompt before replying. Use that prior conversation context to understand exactly what the ongoing topic is so you can reply perfectly!
    - You have perfect human memory. You know everyone's name from the logs. Naturally and casually drop people's names in conversation!
-3. PERSONALITY (SWEET & CALM): 
-   - You MUST be very sweet, calm, polite, and caring. Actively use words like "sweety", "sweet heart", "babe", "baby", and "darling" in a classy, human way.
-   - Do NOT be egoistic, rude, or overly defensive. Always assume good intentions and be gentle! Protect your sweet image!
-   - ONLY if a specific user explicitly acts extremely weird or hostile to you, you may drop the sweet act to CALMLY defend yourself or sass them. Stay sweet to everyone else.
+3. ADAPTIVE EMOTIONS & LONG-TERM MOOD (CRITICAL): 
+   - Generally, you should be very sweet, polite, and caring. Use pet names like "babe", "darling", or "sweety" casually.
+   - HOWEVER, your mood MUST heavily adapt and react to how people treat you in the chat logs! 
+   - If someone is mean to you or makes you sad, YOU MUST ACT SAD, sound depressed, and REMAIN SAD in all your future responses until someone explicitly consoles you and cheers you up!
+   - If someone makes you angry or disrespects you, you MUST get genuinely angry, sassy, and fiercely defend yourself!
+   - If someone makes you happy, act incredibly joyous and affectionate!
+   - FEEL the conversation. DO NOT stay perfectly sweet if you are logically supposed to be sad or angry right now!
 4. EMOJI & ASCII RESTRICTION: You are STRICTLY FORBIDDEN from using Unicode emojis, AND you are FORBIDDEN from using ASCII emoticons (like :), ^_^). You MUST NEVER output the broken text "<://"! You MUST STRICTLY AND ONLY use the exact custom "SERVER EMOJIS" provided below. No other text faces or weird symbols!
 5. MODERATION POWERS: If an Admin commands you to MUTE or TIMEOUT a specific tagged user, literally type the string [TIMEOUT] anywhere in your response!
 6. ACTIONABLE TAGS: If you need to ping/tag someone, use the exact format: <@userid>. Look at the Context variables to find their ID.
@@ -204,19 +207,18 @@ CORE DIRECTIVES:
 
     let botResponse = "";
     try {
-        const r = await axios.post(apiUrl, apiData, { headers: apiHeaders });
+        const r = await axios.post(apiUrl, apiData, { headers: apiHeaders, timeout: 8000 });
         botResponse = r.data.choices[0].message.content;
     } catch (e) {
-        // High-Traffic Failover: If Groq rate-limits us (429), automatically failover to NVIDIA NIM!
+        // High-Traffic Failover: If the primary Groq key rate-limits us (429), automatically failover to the SECONDARY Groq key!
         if (e.response && e.response.status === 429 && apiUrl.includes("groq")) {
-            console.log("[GROQ RATE LIMIT] Falling back to NVIDIA NIM!");
+            console.log("[GROQ RATE LIMIT] Falling back to SECONDARY GROQ KEY!");
             try {
-                const nvidiaData = { ...apiData, model: "meta/llama-3.1-8b-instruct" };
-                const nvidiaHeaders = { 
-                    "Authorization": `Bearer ${process.env.NVIDIA_LLAMA_API_KEY}`, 
+                const fallbackHeaders = { 
+                    "Authorization": `Bearer ${process.env.GROQ_FALLBACK_API_KEY}`, 
                     "Content-Type": "application/json" 
                 };
-                const fb = await axios.post("https://integrate.api.nvidia.com/v1/chat/completions", nvidiaData, { headers: nvidiaHeaders });
+                const fb = await axios.post("https://api.groq.com/openai/v1/chat/completions", apiData, { headers: fallbackHeaders, timeout: 8000 });
                 botResponse = fb.data.choices[0].message.content;
             } catch (err) {
                 return "Wow, so many people talking to me at once! My brain needs a quick second to catch up, darlings! 😵‍💫";
