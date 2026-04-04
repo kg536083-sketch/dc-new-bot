@@ -82,10 +82,37 @@ async function aiReply(message) {
     
     const history = channelMemories.get(channelId);
     
-    history.push({ 
-        role: "user", 
-        content: `[${message.author.displayName}]: ${message.content}` 
-    });
+    let userContent = `[${message.author.displayName}]: ${message.content}`;
+    
+    if (message.attachments.size > 0) {
+        // Find the first image attachment
+        const attachment = message.attachments.first();
+        if (attachment.contentType && attachment.contentType.startsWith('image/')) {
+            try {
+                const imgRes = await axios.get(attachment.url, { responseType: 'arraybuffer' });
+                const base64Image = Buffer.from(imgRes.data).toString('base64');
+                const mimeType = attachment.contentType;
+                
+                history.push({
+                    role: "user",
+                    content: [
+                        { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } },
+                        { type: "text", text: userContent || "What is in this image?" }
+                    ]
+                });
+            } catch (err) {
+                console.error("[IMAGE FETCH ERROR]", err.message);
+                history.push({ role: "user", content: userContent });
+            }
+        } else {
+            history.push({ role: "user", content: userContent });
+        }
+    } else {
+        history.push({ 
+            role: "user", 
+            content: userContent 
+        });
+    }
     
     if (history.length > 40) {
         history.shift(); 
@@ -178,20 +205,25 @@ CORE DIRECTIVES:
 5. MODERATION POWERS: If an Admin commands you to MUTE or TIMEOUT a specific tagged user, literally type the string [TIMEOUT] anywhere in your response!
 6. ACTIONABLE TAGS: If you need to ping/tag someone, use the exact format: <@userid>. Look at the Context variables to find their ID.
 7. TENOR GIFS: You can send animated GIFs by including the string [GIF: keyword] anywhere in your response.
-8. STRICT LENGTH LIMIT (EXTREMELY IMPORTANT): 80% of your replies MUST be just 1 line or maybe 2 lines MAXIMUM. Do NOT reply with long paragraphs. Keep your texts very short, punchy, and exactly like a real human texting back quickly.${tagContext}${liveWebContext}${serverEmojis}${channelContext}${specialUserOverride}`;
+8. STRICT LENGTH LIMIT: Your replies MUST be 1 to 2 lines usually, and a MAXIMUM of 3 lines. DO NOT write longer paragraphs. Keep it short and punchy!${tagContext}${liveWebContext}${serverEmojis}${channelContext}${specialUserOverride}`;
 
-    const url = "https://api.groq.com/openai/v1/chat/completions";
-    const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
+    const url = "https://integrate.api.nvidia.com/v1/chat/completions";
+    const headers = { 
+        "Authorization": `Bearer ${process.env.NVIDIA_API_KEY}`, 
+        "Content-Type": "application/json" 
+    };
     
-    // We use a stronger model (llama-3.3-70b-versatile or 8b) to ensure she closely adheres to the adaptive instructions
+    // We use a model capable of vision processing
     const data = {
-        model: "llama-3.1-8b-instant",  
+        model: "qwen/qwen3.5-122b-a10b",  
         messages: [
             { role: "system", content: systemPrompt },
             ...history
         ],
-        temperature: 0.85, 
-        max_tokens: 150
+        max_tokens: 16384,
+        temperature: 0.60,
+        top_p: 0.95,
+        chat_template_kwargs: { enable_thinking: true }
     };
 
     try {
@@ -295,7 +327,7 @@ CORE DIRECTIVES:
         return payload;
     } catch (e) {
         if (e.response) {
-            console.error("[GROQ ERROR]", JSON.stringify(e.response.data));
+            console.error("[NVIDIA ERROR]", JSON.stringify(e.response.data));
             
             // Handle Rate Limiting (Too many requests/min)
             if (e.response.status === 429) {
@@ -310,7 +342,7 @@ CORE DIRECTIVES:
             
             return `Oops! I had a little brain freeze from my processor... (Error ${e.response.status}) 🧊`;
         } else {
-            console.error("[GROQ ERROR]", e.message);
+            console.error("[NVIDIA ERROR]", e.message);
             return `Oops! I'm having a little brain freeze. 🧊 (${e.message})`;
         }
     }
@@ -345,16 +377,21 @@ Your task is to operate as the "Drama Summarizer". Read the provided Discord cha
 2. Outline the main topics of discussion.
 3. Keep your classic sweet/sassy/flirty attitude toward the user asking for the recap.`;
 
-        const url = "https://api.groq.com/openai/v1/chat/completions";
-        const headers = { "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" };
+        const url = "https://integrate.api.nvidia.com/v1/chat/completions";
+        const headers = { 
+            "Authorization": `Bearer ${process.env.NVIDIA_API_KEY}`, 
+            "Content-Type": "application/json" 
+        };
         const data = {
-            model: "llama-3.1-8b-instant",
+            model: "qwen/qwen3.5-122b-a10b",
             messages: [
                 { role: "system", content: systemPrompt },
                 { role: "user", content: `Hey! I just got here. What did I miss? Here's the raw chat log:\n\n${chatContext}\n\nPlease summarize the drama!` }
             ],
-            temperature: 0.7, 
-            max_tokens: 400
+            max_tokens: 16384,
+            temperature: 0.60,
+            top_p: 0.95,
+            chat_template_kwargs: { enable_thinking: true }
         };
 
         const r = await axios.post(url, data, { headers });
