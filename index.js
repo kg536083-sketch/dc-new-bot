@@ -11,6 +11,8 @@ process.on('uncaughtException', (error) => {
     console.error('[UNCAUGHT EXCEPTION]', error);
 });
 
+const sleep = ms => new Promise(res => setTimeout(res, ms));
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -171,6 +173,7 @@ CORE DIRECTIVES:
    - You are a real human girl. NEVER refer to yourself as an AI, bot, or program. 
    - NEVER use typical bot phrases (e.g., "As an AI...", "How can I help you?").
    - Speak with sharp intelligence, eloquence, and a highly professional but "cheesy" romantic tone. You must sound incredibly natural and articulate.
+   - DO NOT prefix your response with your name (e.g., avoid writing "[Homeless Girl]:" or "[Name]:"). Just output the raw dialogue text of what you want to say naturally.
 2. READ THE ROOM & USE NAMES: 
    - You MUST deeply read the "BACKGROUND CHANNEL CHAT LOG" provided at the end of this prompt before replying. Use that prior conversation context to understand exactly what the ongoing topic is so you can reply perfectly!
    - You have perfect human memory. You know everyone's name from the logs. Naturally and casually drop people's names in conversation!
@@ -190,12 +193,6 @@ CORE DIRECTIVES:
 9. STRICT LENGTH LIMIT: Your replies MUST be 1 to 2 lines usually, and a MAXIMUM of 3 lines. DO NOT write longer paragraphs. Keep it short and punchy!${tagContext}${liveWebContext}${serverEmojis}${channelContext}${specialUserOverride}`;
 
     // GROQ LLAMA 8B INSTANT
-    let apiUrl = "https://api.groq.com/openai/v1/chat/completions";
-    let apiHeaders = { 
-        "Authorization": `Bearer ${process.env.GROQ_API_KEY}`, 
-        "Content-Type": "application/json" 
-    };
-    
     let apiData = {
         model: "llama-3.1-8b-instant",  
         messages: [
@@ -207,36 +204,59 @@ CORE DIRECTIVES:
     };
 
     let botResponse = "";
-    try {
-        const r = await axios.post(apiUrl, apiData, { headers: apiHeaders, timeout: 8000 });
-        botResponse = r.data.choices[0].message.content;
-    } catch (e) {
-        // High-Traffic Failover: If the primary Groq key rate-limits us (429), automatically failover to the SECONDARY Groq key!
-        if (e.response && e.response.status === 429 && apiUrl.includes("groq")) {
-            console.log("[GROQ RATE LIMIT] Falling back to SECONDARY GROQ KEY!");
+    
+    // Auto-Retry Mechanism with Fallback Keys
+    let keys = [process.env.GROQ_API_KEY];
+    if (process.env.GROQ_FALLBACK_API_KEY) keys.push(process.env.GROQ_FALLBACK_API_KEY);
+    
+    let lastError = null;
+    let success = false;
+    
+    for (let key of keys) {
+        for (let attempt = 1; attempt <= 3; attempt++) {
             try {
-                const fallbackHeaders = { 
-                    "Authorization": `Bearer ${process.env.GROQ_FALLBACK_API_KEY}`, 
+                let apiHeaders = { 
+                    "Authorization": `Bearer ${key}`, 
                     "Content-Type": "application/json" 
                 };
-                const fb = await axios.post("https://api.groq.com/openai/v1/chat/completions", apiData, { headers: fallbackHeaders, timeout: 8000 });
-                botResponse = fb.data.choices[0].message.content;
-            } catch (err) {
-                return "Wow, so many people talking to me at once! My brain needs a quick second to catch up, darlings! 😵‍💫";
-            }
-        } else {
-            if (e.response) {
-                console.error("[API ERROR]", JSON.stringify(e.response.data));
-                if (e.response.status === 429) return "Wow, so many people talking to me at once! My brain needs a quick second to catch up, darlings! 😵‍💫";
-                if (e.response.status === 400 && e.response.data && JSON.stringify(e.response.data).toLowerCase().includes("context")) {
+                const r = await axios.post("https://api.groq.com/openai/v1/chat/completions", apiData, { 
+                    headers: apiHeaders, 
+                    timeout: 10000 
+                });
+                botResponse = r.data.choices[0].message.content;
+                success = true;
+                break; // Break retry loop
+            } catch (e) {
+                lastError = e;
+                if (e.response && e.response.status === 429) {
+                    let waitTime = 2000 * attempt; 
+                    if (e.response.headers && e.response.headers['retry-after']) {
+                        waitTime = parseFloat(e.response.headers['retry-after']) * 1000;
+                    }
+                    console.log(`[GROQ RATE LIMIT] Key hit 429. Waiting ${waitTime}ms before retry...`);
+                    await sleep(waitTime);
+                } else if (e.response && e.response.status === 400 && JSON.stringify(e.response.data).toLowerCase().includes("context")) {
                     channelMemories.set(channelId, []); 
                     return "My memory just got completely full processing all our chats! 😭 I just wiped it clean to reboot, try asking me again!";
+                } else {
+                    // Other API error e.g. 401, 500, timeout
+                    break; // break retry loop to try next key
                 }
-                return `Oops! I had a little brain freeze from my processor... (Error ${e.response.status}) 🧊`;
-            } else {
-                console.error("[API ERROR]", e.message);
-                return `Oops! I'm having a little brain freeze. 🧊 (${e.message})`;
             }
+        }
+        if (success) break; // Break key loop if successful
+    }
+    
+    if (!success) {
+        if (lastError && lastError.response) {
+            console.error("[API ERROR]", JSON.stringify(lastError.response.data));
+            if (lastError.response.status === 429) {
+                return "*(Taking a deep breath because my brain is processing so many things right now... Give me a second!)* 😵‍💫";
+            }
+            return `Oops! I had a little brain freeze from my processor... (Error ${lastError.response.status}) 🧊`;
+        } else {
+            console.error("[API ERROR]", lastError ? lastError.message : "Unknown");
+            return `Oops! I'm having a little brain freeze. 🧊 (${lastError ? lastError.message : "Unknown"})`;
         }
     }
 
@@ -339,11 +359,25 @@ CORE DIRECTIVES:
                 // Strip Discord tags, URLs, and Emojis so TTS doesn't read the raw code out loud!
                 let cleanSpeech = botResponse
                     .replace(/https?:\/\/[^\s]+/g, '') // Strip Tenor GIF URLs from spoken audio
-                    .replace(/<@!?[0-9]+>/g, 'baby')   // Replace user tags with a cute word
                     .replace(/<@&[0-9]+>/g, 'you guys') // Replace role tags
                     .replace(/<a?:[^:]+:[0-9]+>/g, '') // Completely strip custom Server Emojis
-                    .replace(/[*_~`>|]/g, '')          // Strip markdown
-                    .trim();
+                    .replace(/[*_~`>|]/g, '');          // Strip markdown
+                    
+                // Replace User Tags with real human names!
+                const mentionRegex = /<@!?([0-9]+)>/g;
+                let match;
+                while ((match = mentionRegex.exec(cleanSpeech)) !== null) {
+                    const userId = match[1];
+                    let name = 'baby'; // fallback
+                    if (message.guild) {
+                        const member = message.guild.members.cache.get(userId);
+                        if (member) name = member.displayName;
+                    }
+                    cleanSpeech = cleanSpeech.replace(match[0], name);
+                }
+                
+                // Remove bracket prefixes if AI hallucinates them
+                cleanSpeech = cleanSpeech.replace(/^\[.*?\]:\s*/i, '').trim();
 
                 if (cleanSpeech.length > 190) {
                     cleanSpeech = cleanSpeech.substring(0, 190) + "...";
@@ -518,8 +552,28 @@ client.on("messageCreate", async (message) => {
             return message.reply(await tldrSummary(message));
         }
 
-        // Otherwise go to standard chat memory core
-        return message.reply(await aiReply(message));
+        // Check if there's a queue set up for this channel
+        const channelId = message.channel.id;
+        if (!client.channelQueues) client.channelQueues = new Map();
+        if (!client.channelQueues.has(channelId)) {
+            client.channelQueues.set(channelId, Promise.resolve());
+        }
+
+        // Queue the AI request so it doesn't corrupt memory arrays or hit rate limit spikes
+        const botTask = client.channelQueues.get(channelId).then(async () => {
+            try {
+                const responsePayload = await aiReply(message);
+                await message.reply(responsePayload);
+            } catch (err) {
+                console.error("[QUEUE ERROR]", err);
+            } finally {
+                // Add a small breather after each message
+                await sleep(500); 
+            }
+        });
+
+        client.channelQueues.set(channelId, botTask.catch(() => {}));
+        return;
     }
 });
 
